@@ -1,0 +1,2 @@
+import { createSimulation } from '../services/generationService.js';
+export function postSimulation(req, res, next) { try { res.json({ data: createSimulation(req.body) }); } catch (error) { next(error); } }

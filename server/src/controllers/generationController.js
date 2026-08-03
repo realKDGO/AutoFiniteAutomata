@@ -1,0 +1,2 @@
+import { createGeneration } from '../services/generationService.js';
+export function postGeneration(req, res, next) { try { res.status(201).json({ data: createGeneration(req.body) }); } catch (error) { next(error); } }

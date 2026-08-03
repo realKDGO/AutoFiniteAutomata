@@ -1,0 +1,3 @@
+async function request(path, body) { const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error?.message ?? 'The generator could not complete your request.'); return payload.data; }
+export const generateAutomaton = input => request('/api/generate', input);
+export const simulateAutomaton = input => request('/api/simulate', input);

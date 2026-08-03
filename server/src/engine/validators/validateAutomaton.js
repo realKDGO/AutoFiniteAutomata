@@ -1,0 +1,6 @@
+export function toNfa(automaton) { return { ...automaton, kind: 'nfa', transitions: Object.fromEntries(automaton.states.map(state => [state, Object.fromEntries(automaton.alphabet.map(symbol => [symbol, [automaton.transitions[state][symbol]]]))])) }; }
+export function validateAutomaton(automaton, kind = 'dfa') {
+ const issues = []; const set = new Set(automaton.states); if (!set.has(automaton.startState)) issues.push('The start state is missing.');
+ for (const state of automaton.states) for (const symbol of automaton.alphabet) { const target = automaton.transitions[state]?.[symbol]; if (target === undefined) issues.push(`Missing transition from ${state} on ${symbol}.`); const targets = Array.isArray(target) ? target : [target]; if (kind === 'dfa' && targets.length !== 1) issues.push(`DFA transition from ${state} on ${symbol} must have one target.`); if (targets.some(next => !set.has(next))) issues.push(`Transition from ${state} references an unknown state.`); }
+ if (automaton.acceptingStates.some(state => !set.has(state))) issues.push('An accepting state is missing.'); return { valid: !issues.length, issues };
+}

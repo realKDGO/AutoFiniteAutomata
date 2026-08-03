@@ -1,0 +1,15 @@
+import cors from 'cors';
+import express from 'express';
+import { env } from './config/env.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { requestLogger } from './middleware/logger.js';
+import { notFoundHandler } from './middleware/notFound.js';
+import { v1Router } from './routes/v1.js';
+export const app = express();
+app.use(cors({ origin: env.corsOrigin }));
+app.use(express.json());
+app.use(requestLogger);
+app.use('/api/v1', v1Router);
+app.use('/api', v1Router);
+app.use(notFoundHandler);
+app.use(errorHandler);

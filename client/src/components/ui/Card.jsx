@@ -1,0 +1,1 @@
+export default function Card({ children, className = '' }) { return <section className={`section-card p-6 transition duration-200 hover:-translate-y-0.5 hover:shadow-lift ${className}`}>{children}</section>; }

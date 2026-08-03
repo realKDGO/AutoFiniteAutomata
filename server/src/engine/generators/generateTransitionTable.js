@@ -1,0 +1,1 @@
+export function generateTransitionTable(automaton) { return { states: automaton.states, alphabet: automaton.alphabet, transitions: automaton.transitions, startState: automaton.startState, acceptStates: automaton.acceptingStates }; }
