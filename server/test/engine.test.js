@@ -15,6 +15,15 @@ test('prefix builder accepts exactly the required initial prefix', () => { const
 test('suffix builder only accepts an ending match', () => { const a = buildSuffixAutomaton({ alphabet, value: '01' }); assert.equal(simulateInput(a, '1001').accepted, true); assert.equal(simulateInput(a, '010').accepted, false); });
 test('substring builder finds a match anywhere', () => { const a = buildSubstringAutomaton({ alphabet, value: '101' }); assert.equal(simulateInput(a, '01010').accepted, true); assert.equal(simulateInput(a, '111').accepted, false); });
 test('AND and OR combiners respectively intersect and union', () => { const prefix = buildPrefixAutomaton({ alphabet, value: '1' }); const suffix = buildSuffixAutomaton({ alphabet, value: '0' }); assert.equal(simulateInput(combineAutomata(prefix, suffix, 'AND'), '10').accepted, true); assert.equal(simulateInput(combineAutomata(prefix, suffix, 'AND'), '11').accepted, false); assert.equal(simulateInput(combineAutomata(prefix, suffix, 'OR'), '11').accepted, true); });
+test('combined rules preserve AND precedence over OR', () => {
+  const automaton = createGeneration({ kind: 'dfa', alphabet, stateNaming: 'alphabet', conditions: [
+    { type: 'startsWith', value: '0' }, { operator: 'AND' }, { type: 'oddLength' },
+    { operator: 'OR' }, { type: 'startsWith', value: '1' }, { operator: 'AND' }, { type: 'evenLength' },
+  ] }).automaton;
+  for (const value of ['0', '000', '010', '10', '11', '1010']) assert.equal(simulateInput(automaton, value).accepted, true, value);
+  for (const value of ['', '1', '00', '01', '111', '101', '100']) assert.equal(simulateInput(automaton, value).accepted, false, value);
+  assert.equal(findDeadStates(automaton).length, 0);
+});
 test('transition table retains a complete structured representation', () => { const a = buildPrefixAutomaton({ alphabet, value: '1' }); const table = generateTransitionTable(a); assert.equal(table.transitions[table.startState]['1'], 'p1'); assert.deepEqual(table.alphabet, alphabet); });
 test('simulation returns every traversal step', () => { const a = buildPrefixAutomaton({ alphabet, value: '10' }); const result = simulateInput(a, '101'); assert.equal(result.steps.length, 3); assert.equal(result.accepted, true); });
 test('state renaming supports q, alphabet, and number styles', () => { const a = buildPrefixAutomaton({ alphabet, value: '1' }); assert.deepEqual(renameStates(a, 'q').states, ['q0', 'q1', 'q2']); assert.deepEqual(renameStates(a, 'alphabet').states, ['A', 'B', 'C']); assert.deepEqual(renameStates(a, 'number').states, ['0', '1', '2']); });
