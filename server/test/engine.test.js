@@ -4,8 +4,10 @@ import { parseRules } from '../src/engine/parsers/parseRules.js';
 import { buildPrefixAutomaton, buildSuffixAutomaton, buildSubstringAutomaton } from '../src/engine/builders/patternBuilders.js';
 import { combineAutomata } from '../src/engine/combiners/combineAutomata.js';
 import { generateTransitionTable } from '../src/engine/generators/generateTransitionTable.js';
+import { generateStateDescriptions } from '../src/engine/generators/generateStateDescriptions.js';
 import { simulateInput } from '../src/engine/simulation/simulateInput.js';
 import { renameStates } from '../src/engine/utils/renameStates.js';
+import { findDeadStates } from '../src/engine/utils/findDeadStates.js';
 import { createGeneration } from '../src/services/generationService.js';
 const alphabet = ['0', '1'];
 test('parser converts conditions into a rule AST', () => assert.deepEqual(parseRules([{ type: 'startsWith', value: '10' }, { operator: 'OR' }, { type: 'contains', value: '11' }]).map(rule => [rule.kind, rule.join]), [['prefix', null], ['substring', 'OR']]));
@@ -33,4 +35,51 @@ test('negated patterns and composed expansion rules remain valid', () => {
 test('expanded-condition validation rejects invalid position and count values', () => {
   assert.throws(() => createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'nthSymbol', position: 0, symbol: '1' }] }), /position greater than zero/);
   assert.throws(() => createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'exactOccurrences', count: -1, symbol: '1' }] }), /non-negative occurrence count/);
+});
+test('findDeadStates flags a classic DFA self-looping trap state', () => {
+  const a = buildPrefixAutomaton({ alphabet, value: '1' });
+  const dead = findDeadStates(a);
+  assert.equal(dead.length, 1);
+  assert.ok(!a.acceptingStates.includes(dead[0]));
+});
+test('findDeadStates never flags an accepting state, even with an odd naming scheme', () => {
+  const generated = createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'lengthEqual', count: 2 }], stateNaming: 'alphabet' }).automaton;
+  const dead = findDeadStates(generated);
+  for (const state of dead) assert.ok(!generated.acceptingStates.includes(state));
+});
+test('findDeadStates detects a trap state reached indirectly, not just via a self-loop', () => {
+  const automaton = {
+    states: ['s0', 's1', 's2', 's3'],
+    alphabet: ['a'],
+    startState: 's0',
+    acceptingStates: ['s3'],
+    transitions: { s0: { a: 's1' }, s1: { a: 's2' }, s2: { a: 's1' }, s3: { a: 's3' } },
+  };
+  assert.deepEqual(findDeadStates(automaton).sort(), ['s0', 's1', 's2']);
+});
+test('findDeadStates works for NFA-shaped (array) transitions', () => {
+  const automaton = {
+    states: ['n0', 'n1', 'n2'],
+    alphabet: ['a'],
+    startState: 'n0',
+    acceptingStates: ['n1'],
+    transitions: { n0: { a: ['n1', 'n2'] }, n1: { a: ['n1'] }, n2: { a: ['n2'] } },
+  };
+  assert.deepEqual(findDeadStates(automaton), ['n2']);
+});
+test('generateTransitionTable and generateStateDescriptions surface matching dead-state info', () => {
+  const automaton = {
+    states: ['s0', 's1'],
+    alphabet: ['a'],
+    startState: 's0',
+    acceptingStates: [],
+    transitions: { s0: { a: 's1' }, s1: { a: 's1' } },
+  };
+  const table = generateTransitionTable(automaton);
+  assert.deepEqual(table.deadStates.sort(), ['s0', 's1']);
+  const descriptions = generateStateDescriptions(automaton);
+  const s1 = descriptions.find(item => item.state === 's1');
+  assert.equal(s1.dead, true);
+  assert.equal(s1.accepting, false);
+  assert.match(s1.description, /dead \(trap\) state/);
 });
