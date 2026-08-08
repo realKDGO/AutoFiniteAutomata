@@ -1,16 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-@layer base {
-  html { @apply scroll-smooth; }
-  body { @apply min-h-screen bg-canvas font-sans text-ink antialiased selection:bg-primary-soft selection:text-primary-hover dark:bg-canvas-dark dark:text-ink-dark; }
-  input, select, textarea { @apply transition-colors duration-200; }
-}
-@layer components {
-  .focus-ring { @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring focus-visible:ring-offset-2 focus-visible:ring-offset-canvas dark:focus-visible:ring-offset-canvas-dark; }
-  .eyebrow { @apply text-xs font-bold uppercase tracking-[0.2em] text-primary; }
-  .section-card { @apply rounded-2xl border border-line bg-surface shadow-card dark:border-line-dark dark:bg-surface-dark; }
-  .data-table tbody tr:nth-child(even) { @apply bg-surface-muted/70 dark:bg-surface-darkMuted/40; }
-  .data-table tbody tr { @apply transition-colors hover:bg-primary-soft/50 dark:hover:bg-primary/10; }
-}
+:root { --diagram-node: #ffffff; --diagram-stroke: #607083; --diagram-text: #17212b; --diagram-edge: #607083; --diagram-label: #ffffff; --diagram-active: #1683d8; --diagram-active-soft: #eaf5fd; --diagram-dead: #c94c4c; --diagram-dead-soft: #fff0f0; }
+.dark { --diagram-node: #17212d; --diagram-stroke: #a9b7c6; --diagram-text: #e6edf5; --diagram-edge: #a9b7c6; --diagram-label: #17212d; --diagram-active: #73b8eb; --diagram-active-soft: #133c59; --diagram-dead: #f08a8a; --diagram-dead-soft: #48252a; }
+@layer base { html { @apply scroll-smooth; } body { @apply min-h-screen bg-canvas font-sans text-ink antialiased selection:bg-primary-soft selection:text-primary-hover dark:bg-canvas-dark dark:text-ink-dark; } input, select, textarea { @apply transition-colors duration-200; } }
+@layer components { .focus-ring { @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring focus-visible:ring-offset-2 focus-visible:ring-offset-canvas dark:focus-visible:ring-offset-canvas-dark; } .eyebrow { @apply text-xs font-bold uppercase tracking-[0.2em] text-primary; } .section-card { @apply rounded-2xl border border-line bg-surface shadow-card dark:border-line-dark dark:bg-surface-dark; } .data-table tbody tr:nth-child(even) { @apply bg-surface-muted/70 dark:bg-surface-darkMuted/40; } .data-table tbody tr { @apply transition-colors hover:bg-primary-soft/50 dark:hover:bg-primary/10; } }

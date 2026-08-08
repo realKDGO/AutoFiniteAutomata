@@ -1,8 +1,18 @@
 {
-  "buildCommand": "npm run build -w client",
-  "outputDirectory": "client/dist",
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
   "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "client/dist",
+  "functions": {
+    "api/[...path].js": {
+      "maxDuration": 10
+    }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
