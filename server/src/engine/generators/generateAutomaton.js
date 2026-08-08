@@ -1,9 +1,45 @@
 import { buildPrefixAutomaton, buildSubstringAutomaton, buildSuffixAutomaton } from '../builders/patternBuilders.js';
 import { buildNotPrefixAutomaton, buildNotSubstringAutomaton, buildNotSuffixAutomaton } from '../builders/negativePatternBuilders.js';
 import { buildEvenLengthAutomaton, buildLengthAtLeastAutomaton, buildLengthAtMostAutomaton, buildLengthEqualAutomaton, buildNeverAutomaton, buildOddLengthAutomaton } from '../builders/lengthBuilders.js';
-import { buildFirstSymbolAutomaton, buildLastSymbolAutomaton, buildNthSymbolAutomaton } from '../builders/positionBuilders.js';
+import { buildFirstSymbolAutomaton, buildLastSymbolAutomaton, buildNthSymbolAutomaton, buildNthToLastSymbolAutomaton, buildSecondToLastSymbolAutomaton } from '../builders/positionBuilders.js';
 import { buildAtLeastOccurrencesAutomaton, buildAtMostOccurrencesAutomaton, buildExactOccurrencesAutomaton, buildParityOccurrencesAutomaton } from '../builders/countingBuilders.js';
 import { combineRuleAutomata } from '../combiners/combineAutomata.js';
 import { toNfa } from '../validators/validateAutomaton.js';
-const builders = { prefix: buildPrefixAutomaton, suffix: buildSuffixAutomaton, substring: buildSubstringAutomaton, notPrefix: buildNotPrefixAutomaton, notSuffix: buildNotSuffixAutomaton, notSubstring: buildNotSubstringAutomaton, lengthEqual: buildLengthEqualAutomaton, lengthAtLeast: buildLengthAtLeastAutomaton, lengthAtMost: buildLengthAtMostAutomaton, lengthGreater: rule => buildLengthAtLeastAutomaton({ ...rule, count: rule.count + 1 }), lengthLess: rule => rule.count === 0 ? buildNeverAutomaton(rule) : buildLengthAtMostAutomaton({ ...rule, count: rule.count - 1 }), evenLength: buildEvenLengthAutomaton, oddLength: buildOddLengthAutomaton, firstSymbol: buildFirstSymbolAutomaton, lastSymbol: buildLastSymbolAutomaton, nthSymbol: buildNthSymbolAutomaton, nthSymbolNot: rule => buildNthSymbolAutomaton({ ...rule, negate: true }), exactOccurrences: buildExactOccurrencesAutomaton, atLeastOccurrences: buildAtLeastOccurrencesAutomaton, atMostOccurrences: buildAtMostOccurrencesAutomaton, evenOccurrences: rule => buildParityOccurrencesAutomaton(rule), oddOccurrences: rule => buildParityOccurrencesAutomaton({ ...rule, odd: true }) };
-export function generateAutomaton({ kind, alphabet, rules }) { const individual = rules.map(rule => { const builder = builders[rule.kind]; if (!builder) throw new Error(`No builder is registered for rule ${rule.kind}.`); return builder({ ...rule, alphabet }); }); const combined = combineRuleAutomata(individual, rules.slice(1).map(rule => rule.join)); return kind === 'nfa' ? toNfa(combined) : { ...combined, kind: 'dfa' }; }
+
+const builders = {
+  prefix: buildPrefixAutomaton,
+  suffix: buildSuffixAutomaton,
+  substring: buildSubstringAutomaton,
+  notPrefix: buildNotPrefixAutomaton,
+  notSuffix: buildNotSuffixAutomaton,
+  notSubstring: buildNotSubstringAutomaton,
+  lengthEqual: buildLengthEqualAutomaton,
+  lengthAtLeast: buildLengthAtLeastAutomaton,
+  lengthAtMost: buildLengthAtMostAutomaton,
+  lengthGreater: rule => buildLengthAtLeastAutomaton({ ...rule, count: rule.count + 1 }),
+  lengthLess: rule => rule.count === 0 ? buildNeverAutomaton(rule) : buildLengthAtMostAutomaton({ ...rule, count: rule.count - 1 }),
+  evenLength: buildEvenLengthAutomaton,
+  oddLength: buildOddLengthAutomaton,
+  firstSymbol: buildFirstSymbolAutomaton,
+  lastSymbol: buildLastSymbolAutomaton,
+  nthSymbol: buildNthSymbolAutomaton,
+  nthSymbolNot: rule => buildNthSymbolAutomaton({ ...rule, negate: true }),
+  nthToLastSymbol: buildNthToLastSymbolAutomaton,
+  nthToLastSymbolNot: rule => buildNthToLastSymbolAutomaton({ ...rule, negate: true }),
+  secondToLastSymbol: buildSecondToLastSymbolAutomaton,
+  exactOccurrences: buildExactOccurrencesAutomaton,
+  atLeastOccurrences: buildAtLeastOccurrencesAutomaton,
+  atMostOccurrences: buildAtMostOccurrencesAutomaton,
+  evenOccurrences: rule => buildParityOccurrencesAutomaton(rule),
+  oddOccurrences: rule => buildParityOccurrencesAutomaton({ ...rule, odd: true }),
+};
+
+export function generateAutomaton({ kind, alphabet, rules }) {
+  const individual = rules.map(rule => {
+    const builder = builders[rule.kind];
+    if (!builder) throw new Error(`No builder is registered for rule ${rule.kind}.`);
+    return builder({ ...rule, alphabet });
+  });
+  const combined = combineRuleAutomata(individual, rules.slice(1).map(rule => rule.join));
+  return kind === 'nfa' ? toNfa(combined) : { ...combined, kind: 'dfa' };
+}

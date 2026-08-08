@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseRules } from '../src/engine/parsers/parseRules.js';
 import { buildPrefixAutomaton, buildSuffixAutomaton, buildSubstringAutomaton } from '../src/engine/builders/patternBuilders.js';
@@ -35,7 +35,11 @@ test('length conditions handle equality, bounds, and parity', () => {
 test('position and counting conditions enforce their requested symbol', () => {
   const position = createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'nthSymbolNot', position: 2, symbol: '1' }] }).automaton;
   const count = createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'exactOccurrences', count: 2, symbol: '1' }] }).automaton;
+  const secondToLast = createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'secondToLastSymbol', symbol: '1' }] }).automaton;
+  const nthToLast = createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'nthToLastSymbol', position: 3, symbol: '0' }] }).automaton;
   assert.equal(simulateInput(position, '00').accepted, true); assert.equal(simulateInput(position, '01').accepted, false); assert.equal(simulateInput(count, '101').accepted, true);
+  assert.equal(simulateInput(secondToLast, '10').accepted, true); assert.equal(simulateInput(secondToLast, '01').accepted, false); assert.equal(simulateInput(secondToLast, '1').accepted, false);
+  assert.equal(simulateInput(nthToLast, '010').accepted, true); assert.equal(simulateInput(nthToLast, '110').accepted, false);
 });
 test('negated patterns and composed expansion rules remain valid', () => {
   const generated = createGeneration({ kind: 'dfa', alphabet, conditions: [{ type: 'doesNotContain', value: '11' }, { operator: 'AND' }, { type: 'oddLength' }] }).automaton;

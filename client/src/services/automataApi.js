@@ -1,4 +1,4 @@
-﻿async function request(path, body) {
+async function request(path, body) {
   let response;
   try {
     response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -12,5 +12,7 @@
   if (!payload.data) throw new Error('The AutoFA API returned an incomplete response. Please try again.');
   return payload.data;
 }
+
 export const generateAutomaton = input => request('/api/generate', input);
 export const simulateAutomaton = input => request('/api/simulate', input);
+export const convertNfaToDfa = input => request('/api/convert-nfa', input);
