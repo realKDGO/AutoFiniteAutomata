@@ -10,6 +10,72 @@ const MARGIN_Y = 115;
 const LOOP_OFFSET = 102; // distance from node centre to loop apex
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GEOMETRY SAFETY LAYER
+// ─────────────────────────────────────────────────────────────────────────────
+// The functions below make edgeGeometry() safe to call with either:
+//   (a) generated positions carrying layout metadata (col/index/gridRow/rowInLayer), or
+//   (b) manually positioned Builder states carrying only { x, y }.
+// Generated diagrams keep their exact existing behaviour (the metadata branch
+// below is taken whenever that metadata is present); Builder diagrams derive
+// an equivalent value from real coordinates instead of producing NaN.
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Column/row separation between two laid-out points, used to decide edge
+ * routing (straight vs. arched) and arc height.
+ *
+ * Generated layouts provide col/index and gridRow/rowInLayer directly, so
+ * this reproduces the original arithmetic exactly when that metadata exists.
+ * Manually positioned Builder states don't carry that metadata — for those,
+ * derive an equivalent "how many layout steps apart" value from the actual
+ * pixel distance instead of doing arithmetic on undefined values (which
+ * previously produced NaN and an unrenderable SVG path).
+ */
+function gridSeparation(source, target) {
+  const sourceCol = source.col ?? source.index;
+  const targetCol = target.col ?? target.index;
+  const colDiff =
+    isFiniteNumber(sourceCol) && isFiniteNumber(targetCol)
+      ? Math.abs(sourceCol - targetCol)
+      : Math.abs((target.x ?? 0) - (source.x ?? 0)) / H_GAP;
+
+  const sourceRow = source.gridRow ?? source.rowInLayer;
+  const targetRow = target.gridRow ?? target.rowInLayer;
+  const rowDiff =
+    isFiniteNumber(sourceRow) && isFiniteNumber(targetRow)
+      ? Math.abs(sourceRow - targetRow)
+      : Math.abs((target.y ?? 0) - (source.y ?? 0)) / V_GAP;
+
+  return { colDiff, rowDiff };
+}
+
+/**
+ * Verifies a geometry object has finite path coordinates and a finite label
+ * position. If the routing math above ever produces something non-finite
+ * (it shouldn't, once gridSeparation() is used — this is a safety net, not a
+ * substitute for correct math), fall back to a plain straight line between
+ * the given (always-finite) boundary points rather than emit an invalid path.
+ */
+function safeGeometry(geometry, start, end) {
+  const numbersInPath = geometry.path.match(/-?\d+(\.\d+)?/g) ?? [];
+  const pathIsFinite = numbersInPath.length > 0 && numbersInPath.every(n => Number.isFinite(Number(n)));
+  const labelIsFinite = isFiniteNumber(geometry.label?.x) && isFiniteNumber(geometry.label?.y);
+  if (pathIsFinite && labelIsFinite) return geometry;
+
+  const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  return {
+    ...geometry,
+    path: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
+    label: mid,
+    start,
+    end,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // UTILITY
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -337,26 +403,25 @@ function selfLoopGeometry(edge, positions, edges) {
   const r = NODE_RADIUS;
   const o = LOOP_OFFSET;
   const side = loopSide(edge, positions, edges);
-  if (side === 'right')
-    return {
-      path: `M ${p.x + r - 4} ${p.y - 15} C ${p.x + o} ${p.y - 62}, ${p.x + o} ${p.y + 62}, ${p.x + r - 4} ${p.y + 15}`,
-      label: { x: p.x + o - 8, y: p.y },
-    };
-  if (side === 'bottom')
-    return {
-      path: `M ${p.x - 16} ${p.y + r - 4} C ${p.x - 64} ${p.y + o}, ${p.x + 64} ${p.y + o}, ${p.x + 16} ${p.y + r - 4}`,
-      label: { x: p.x, y: p.y + o - 6 },
-    };
-  if (side === 'left')
-    return {
-      path: `M ${p.x - r + 4} ${p.y + 15} C ${p.x - o} ${p.y + 62}, ${p.x - o} ${p.y - 62}, ${p.x - r + 4} ${p.y - 15}`,
-      label: { x: p.x - o + 8, y: p.y },
-    };
+  if (side === 'right') {
+    const start = { x: p.x + r - 4, y: p.y - 15 };
+    const end = { x: p.x + r - 4, y: p.y + 15 };
+    return { path: `M ${start.x} ${start.y} C ${p.x + o} ${p.y - 62}, ${p.x + o} ${p.y + 62}, ${end.x} ${end.y}`, label: { x: p.x + o - 8, y: p.y }, start, end };
+  }
+  if (side === 'bottom') {
+    const start = { x: p.x - 16, y: p.y + r - 4 };
+    const end = { x: p.x + 16, y: p.y + r - 4 };
+    return { path: `M ${start.x} ${start.y} C ${p.x - 64} ${p.y + o}, ${p.x + 64} ${p.y + o}, ${end.x} ${end.y}`, label: { x: p.x, y: p.y + o - 6 }, start, end };
+  }
+  if (side === 'left') {
+    const start = { x: p.x - r + 4, y: p.y + 15 };
+    const end = { x: p.x - r + 4, y: p.y - 15 };
+    return { path: `M ${start.x} ${start.y} C ${p.x - o} ${p.y + 62}, ${p.x - o} ${p.y - 62}, ${end.x} ${end.y}`, label: { x: p.x - o + 8, y: p.y }, start, end };
+  }
   // top (default)
-  return {
-    path: `M ${p.x - 16} ${p.y - r + 4} C ${p.x - 64} ${p.y - o}, ${p.x + 64} ${p.y - o}, ${p.x + 16} ${p.y - r + 4}`,
-    label: { x: p.x, y: p.y - o + 6 },
-  };
+  const start = { x: p.x - 16, y: p.y - r + 4 };
+  const end = { x: p.x + 16, y: p.y - r + 4 };
+  return { path: `M ${start.x} ${start.y} C ${p.x - 64} ${p.y - o}, ${p.x + 64} ${p.y - o}, ${end.x} ${end.y}`, label: { x: p.x, y: p.y - o + 6 }, start, end };
 }
 
 /**
@@ -368,8 +433,9 @@ function selfLoopGeometry(edge, positions, edges) {
  *   • general straight edges
  */
 export function edgeGeometry(edge, positions, edges) {
-  const source = positions[edge.from];
-  const target = positions[edge.to];
+  const source = positions[edge.from] || (positions[edge.from?.name] ?? { x: 150, y: 160 });
+  const target = positions[edge.to] || (positions[edge.to?.name] ?? { x: 300, y: 160 });
+  if (!source || !target) return { path: 'M 0 0 L 0 0', label: { x: 0, y: 0 }, start: { x: 0, y: 0 }, end: { x: 0, y: 0 } };
   if (edge.from === edge.to) return selfLoopGeometry(edge, positions, edges);
 
   const { start, end } = boundaryPoint(source, target);
@@ -378,17 +444,29 @@ export function edgeGeometry(edge, positions, edges) {
   if (target.row === 'dead' && source.row === 'main') {
     const direction = end.x >= start.x ? 18 : -18;
     const bendY = source.y + 78;
-    return {
-      path: `M ${start.x} ${start.y} Q ${source.x + direction} ${bendY} ${end.x} ${end.y}`,
-      label: { x: (start.x + end.x) / 2 + direction, y: bendY - 14 },
-    };
+    return safeGeometry(
+      {
+        path: `M ${start.x} ${start.y} Q ${source.x + direction} ${bendY} ${end.x} ${end.y}`,
+        label: { x: (start.x + end.x) / 2 + direction, y: bendY - 14 },
+        start,
+        end,
+      },
+      start,
+      end
+    );
   }
   if (source.row === 'dead' || target.row === 'dead') {
     const bendY = Math.max(source.y, target.y) + 74;
-    return {
-      path: `M ${start.x} ${start.y} Q ${(start.x + end.x) / 2} ${bendY} ${end.x} ${end.y}`,
-      label: { x: (start.x + end.x) / 2, y: bendY + 14 },
-    };
+    return safeGeometry(
+      {
+        path: `M ${start.x} ${start.y} Q ${(start.x + end.x) / 2} ${bendY} ${end.x} ${end.y}`,
+        label: { x: (start.x + end.x) / 2, y: bendY + 14 },
+        start,
+        end,
+      },
+      start,
+      end
+    );
   }
 
   // --- Bidirectional pair: offset the two arrows to avoid overlap ---
@@ -398,7 +476,6 @@ export function edgeGeometry(edge, positions, edges) {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
   const dist = Math.hypot(dx, dy) || 1;
-  const span = Math.max(Math.abs(source.col ?? source.index) - Math.abs(target.col ?? target.index) | 0, 1);
 
   if (reverse) {
     // Perpendicular offset to separate the two curves
@@ -406,15 +483,20 @@ export function edgeGeometry(edge, positions, edges) {
     const perpY = (dx / dist) * 45;
     const midX = (start.x + end.x) / 2 + perpX;
     const midY = (start.y + end.y) / 2 + perpY;
-    return {
-      path: `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`,
-      label: { x: midX, y: midY - 12 },
-    };
+    return safeGeometry(
+      {
+        path: `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`,
+        label: { x: midX, y: midY - 12 },
+        start,
+        end,
+      },
+      start,
+      end
+    );
   }
 
   // --- Straight short-range edge ---
-  const colDiff = Math.abs((source.col ?? source.index) - (target.col ?? target.index));
-  const rowDiff = Math.abs((source.gridRow ?? source.rowInLayer ?? 0) - (target.gridRow ?? target.rowInLayer ?? 0));
+  const { colDiff, rowDiff } = gridSeparation(source, target);
   const isNeighbour = colDiff <= 1 && rowDiff <= 1;
 
   if (isNeighbour) {
@@ -422,10 +504,16 @@ export function edgeGeometry(edge, positions, edges) {
     // Offset label slightly to the left of the direction vector
     const perpX = (-dy / dist) * 18;
     const perpY = (dx / dist) * 18;
-    return {
-      path: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
-      label: { x: labelMid.x + perpX, y: labelMid.y + perpY - 4 },
-    };
+    return safeGeometry(
+      {
+        path: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
+        label: { x: labelMid.x + perpX, y: labelMid.y + perpY - 4 },
+        start,
+        end,
+      },
+      start,
+      end
+    );
   }
 
   // --- Long arched edge ---
@@ -434,10 +522,16 @@ export function edgeGeometry(edge, positions, edges) {
   const perpY = (dx / dist) * arcHeight;
   const midX = (start.x + end.x) / 2 + perpX;
   const midY = (start.y + end.y) / 2 + perpY;
-  return {
-    path: `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`,
-    label: { x: midX, y: midY - 12 },
-  };
+  return safeGeometry(
+    {
+      path: `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`,
+      label: { x: midX, y: midY - 12 },
+      start,
+      end,
+    },
+    start,
+    end
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

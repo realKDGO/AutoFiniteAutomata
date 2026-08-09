@@ -74,7 +74,13 @@ function StateDiagram({ automaton, simulation }) {
 
           {/* Edges */}
           {routes.map(({ edge, geometry }) => (
-            <TransitionEdge key={edge.key} edge={edge} geometry={geometry} active={highlights.edges} />
+            <TransitionEdge
+              key={edge.key}
+              edge={edge}
+              geometry={geometry}
+              alphabet={automaton.alphabet}
+              active={highlights.edges}
+            />
           ))}
 
           {/* State nodes */}
