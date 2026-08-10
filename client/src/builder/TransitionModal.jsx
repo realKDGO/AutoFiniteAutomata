@@ -11,6 +11,8 @@ export default function TransitionModal({
   alphabet = [],
   onSave,
   onDelete,
+  sourceConnectorId,
+  targetConnectorId,
 }) {
   const [selectedSymbols, setSelectedSymbols] = useState([]);
 
@@ -28,7 +30,7 @@ export default function TransitionModal({
 
   const handleSave = () => {
     if (selectedSymbols.length > 0) {
-      onSave(selectedSymbols);
+      onSave(selectedSymbols, sourceConnectorId, targetConnectorId);
     } else if (onDelete) {
       onDelete();
     }

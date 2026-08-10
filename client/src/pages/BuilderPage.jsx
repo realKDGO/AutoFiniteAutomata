@@ -4,9 +4,7 @@ import {
   Trash2,
   CheckCircle2,
   AlertTriangle,
-  RotateCcw,
   MousePointer,
-  Move,
   ArrowUpRight,
   ShieldAlert,
   Play,
@@ -60,13 +58,10 @@ export default function BuilderPage() {
   const [selectedStateId, setSelectedStateId] = useState(null);
   const [selectedTransitionKey, setSelectedTransitionKey] = useState(null);
 
-  // Mobile-only contextual floating panel: 'state' | 'simulator' | 'table' | null.
-  // Transition selection already opens the existing TransitionModal (edit/delete/
-  // symbols), which doubles as the compact transition inspector on every screen
-  // size, so it doesn't need a separate mobileSheet state. Desktop ignores this
-  // entirely — its panels stay always-visible in the side column; this only
-  // drives the MobileSheet instances below, which are hidden on desktop via CSS.
-  const [mobileSheet, setMobileSheet] = useState(null);
+  // One source of truth for contextual Builder interfaces. Persistent canvas
+  // controls intentionally sit outside this state, but editing panels never
+  // stack on top of one another.
+  const [activePanel, setActivePanel] = useState(null); // 'editState' | 'transitionDetails' | 'simulator' | 'table' | null
 
   // Mobile fullscreen workspace: BuilderCanvas reports whether it's
   // currently fullscreen and hands back the DOM node that's actually in
@@ -75,24 +70,34 @@ export default function BuilderPage() {
   // element and its descendants).
   const fullscreenContainerRef = useRef(null);
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
+  const [canvasResetVersion, setCanvasResetVersion] = useState(0);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
+  );
+  const [toast, setToast] = useState('');
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 1023px)');
+    const change = event => setIsMobileViewport(event.matches);
+    query.addEventListener('change', change);
+    return () => query.removeEventListener('change', change);
+  }, []);
+
+  const showToast = message => {
+    setToast(message);
+    window.setTimeout(() => setToast(current => current === message ? '' : current), 2600);
+  };
 
   const handleAddStateAt = coords => {
     addState({ position: coords });
   };
 
-  useEffect(() => {
-    if (selectedStateId) {
-      setMobileSheet('state');
-    } else if (mobileSheet === 'state') {
-      setMobileSheet(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStateId]);
-
   // Transition Modal State
   const [transitionModalOpen, setTransitionModalOpen] = useState(false);
   const [pendingFromId, setPendingFromId] = useState(null);
   const [pendingToId, setPendingToId] = useState(null);
+  const [pendingSourceConnectorId, setPendingSourceConnectorId] = useState(null);
+  const [pendingTargetConnectorId, setPendingTargetConnectorId] = useState(null);
   const [editingTransitionId, setEditingTransitionId] = useState(null);
   const [existingSymbols, setExistingSymbols] = useState([]);
 
@@ -108,6 +113,29 @@ export default function BuilderPage() {
 
   const validation = validateAutomaton(automaton);
   const selectedState = selectedStateId ? stateById[selectedStateId] : null;
+
+  const closeContextualPanels = () => {
+    setActivePanel(null);
+    setTransitionModalOpen(false);
+    setSelectedStateId(null);
+    setSelectedTransitionKey(null);
+  };
+
+  const togglePanel = panel => {
+    if (activePanel === panel) {
+      setActivePanel(null);
+      return;
+    }
+    setTransitionModalOpen(false);
+    setSelectedStateId(null);
+    setSelectedTransitionKey(null);
+    setActivePanel(panel);
+  };
+
+  const activateTool = tool => {
+    closeContextualPanels();
+    setActiveTool(tool);
+  };
 
   // Handler for adding symbol to alphabet
   const handleAddSymbol = e => {
@@ -131,17 +159,17 @@ export default function BuilderPage() {
     setAlphabet(automaton.alphabet.filter(s => s !== sym));
   };
 
-  const handleStartTransition = (fromId, toId) => {
-    const existing = automaton.transitions.find(
-      t => t.from === fromId && t.to === toId
-    );
-    setPendingFromId(fromId);
-    setPendingToId(toId);
-    setEditingTransitionId(existing ? existing.id : null);
+  const handleStartTransition = ({ sourceId, targetId, sourceConnectorId, targetConnectorId }) => {
+    setSelectedStateId(null);
+    setSelectedTransitionKey(null);
+    setActivePanel('transitionDetails');
+    setPendingFromId(sourceId);
+    setPendingToId(targetId);
+    setPendingSourceConnectorId(sourceConnectorId);
+    setPendingTargetConnectorId(targetConnectorId);
+    setEditingTransitionId(null);
     setExistingSymbols(
-      existing && existing.symbols.length > 0
-        ? existing.symbols
-        : [automaton.alphabet[0] ?? '0']
+      [automaton.alphabet[0] ?? '0']
     );
     setTransitionModalOpen(true);
   };
@@ -150,20 +178,24 @@ export default function BuilderPage() {
   // transition arrow. Opens the TransitionModal pre-populated with that edge.
   const handleEditTransition = edge => {
     if (!edge) return;
+    setSelectedStateId(null);
+    setActivePanel('transitionDetails');
     const firstTransId = edge.transitionIds?.[0];
     setPendingFromId(edge.from);
     setPendingToId(edge.to);
+    setPendingSourceConnectorId(edge.sourceConnectorId);
+    setPendingTargetConnectorId(edge.targetConnectorId);
     setEditingTransitionId(firstTransId ?? null);
     setExistingSymbols(edge.labels ?? [automaton.alphabet[0] ?? '0']);
     setTransitionModalOpen(true);
   };
 
-  const handleSaveTransitionModal = symbols => {
+  const handleSaveTransitionModal = (symbols, sourceConnectorId, targetConnectorId) => {
     if (pendingFromId && pendingToId) {
       if (editingTransitionId) {
-        updateTransition(editingTransitionId, symbols);
+        updateTransition(editingTransitionId, symbols, sourceConnectorId, targetConnectorId);
       } else {
-        addTransition(pendingFromId, pendingToId, symbols);
+        addTransition(pendingFromId, pendingToId, symbols, sourceConnectorId, targetConnectorId);
       }
     }
   };
@@ -172,6 +204,19 @@ export default function BuilderPage() {
     if (editingTransitionId) {
       removeTransition(editingTransitionId);
     }
+  };
+
+  const handleReconnectTransition = (edge, targetId, targetConnectorId) => {
+    const transition = automaton.transitions.find(item => item.id === edge?.transitionIds?.[0]);
+    if (!transition) return;
+    updateTransition(
+      transition.id,
+      transition.symbols,
+      transition.sourceConnectorId,
+      targetConnectorId,
+      transition.from,
+      targetId
+    );
   };
 
   const handleUpdateTableCell = (fromId, symbol, targetStateIds) => {
@@ -198,7 +243,7 @@ export default function BuilderPage() {
   return (
     <PageContainer className="max-w-7xl space-y-6">
       {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="flex flex-wrap items-end gap-4">
         <div>
           <p className="eyebrow">AUTOMATON BUILDER</p>
           <h1 className="mt-2 font-display text-3xl font-bold sm:text-4xl">
@@ -207,12 +252,6 @@ export default function BuilderPage() {
           <p className="mt-2 text-ink-muted dark:text-ink-darkMuted">
             Create and simulate your own finite automaton.
           </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button variant="secondary" onClick={() => setClearModalOpen(true)}>
-            <RotateCcw size={16} /> Clear Automaton
-          </Button>
         </div>
       </div>
 
@@ -303,13 +342,19 @@ export default function BuilderPage() {
       </Card>
 
       {/* Main Workspace Layout */}
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-3">
         {/* Left Column: Canvas & Controls (2 Cols) */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
           {/* Builder Toolbar */}
           <Card className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" onClick={() => addState()} size="sm">
+              <Button type="button" onClick={() => {
+                if (isMobileViewport && !isCanvasFullscreen) {
+                  showToast('This feature is only available in Fullscreen mode.');
+                  return;
+                }
+                addState();
+              }} size="sm">
                 <Plus size={16} /> Add State
               </Button>
 
@@ -317,7 +362,7 @@ export default function BuilderPage() {
 
               <button
                 type="button"
-                onClick={() => setActiveTool('select')}
+                onClick={() => activateTool('select')}
                 className={`focus-ring inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
                   activeTool === 'select'
                     ? 'bg-primary text-white shadow-sm'
@@ -329,7 +374,13 @@ export default function BuilderPage() {
 
               <button
                 type="button"
-                onClick={() => setActiveTool('transition')}
+                onClick={() => {
+                  if (isMobileViewport && !isCanvasFullscreen) {
+                    showToast('This feature is only available in Fullscreen mode.');
+                    return;
+                  }
+                  activateTool('transition');
+                }}
                 className={`focus-ring inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
                   activeTool === 'transition'
                     ? 'bg-primary text-white shadow-sm'
@@ -348,6 +399,7 @@ export default function BuilderPage() {
               stateById={stateById}
               groupedEdges={groupedEdges}
               activeTool={activeTool}
+              activePanel={activePanel}
               selectedStateId={selectedStateId}
               selectedTransitionKey={selectedTransitionKey}
               onSelectState={id => {
@@ -355,24 +407,32 @@ export default function BuilderPage() {
                 setSelectedTransitionKey(null);
                 if (id) {
                   setEditStateName(stateById[id]?.name ?? '');
+                  setTransitionModalOpen(false);
+                  setActivePanel('editState');
+                } else if (activePanel === 'editState') {
+                  setActivePanel(null);
                 }
               }}
               onSelectTransition={edge => {
                 setSelectedTransitionKey(edge.key);
                 setSelectedStateId(null);
+                setActivePanel(current => current === 'editState' ? null : current);
               }}
               onMoveState={moveState}
               onStartTransition={handleStartTransition}
               onEditTransition={handleEditTransition}
-              onSetActiveTool={setActiveTool}
+              onReconnectTransition={handleReconnectTransition}
+              onSetActiveTool={activateTool}
               onAddStateAt={handleAddStateAt}
-              onOpenMobileSheet={setMobileSheet}
+              onOpenMobileSheet={togglePanel}
               onFullscreenChange={setIsCanvasFullscreen}
               fullscreenContainerRef={fullscreenContainerRef}
               onUndo={undo}
               onRedo={redo}
               canUndo={canUndo}
               canRedo={canRedo}
+              onRequestClear={() => setClearModalOpen(true)}
+              resetVersion={canvasResetVersion}
             />
           </Card>
 
@@ -540,7 +600,7 @@ export default function BuilderPage() {
         >
           <button
             type="button"
-            onClick={() => setMobileSheet('table')}
+            onClick={() => togglePanel('table')}
             className="focus-ring flex h-12 w-12 items-center justify-center rounded-full bg-surface text-primary shadow-lift border border-line dark:border-line-dark dark:bg-surface-dark"
             aria-label="Open transition table"
           >
@@ -548,7 +608,7 @@ export default function BuilderPage() {
           </button>
           <button
             type="button"
-            onClick={() => setMobileSheet('simulator')}
+            onClick={() => togglePanel('simulator')}
             className="focus-ring flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-lift"
             aria-label="Open simulator"
           >
@@ -564,11 +624,11 @@ export default function BuilderPage() {
       <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
       <div className="lg:hidden">
         <MobileSheet
-          open={mobileSheet === 'state' && Boolean(selectedState)}
+          open={activePanel === 'editState' && Boolean(selectedState)}
           title={selectedState ? `Edit State ${selectedState.name}` : 'Edit State'}
           onClose={() => {
             setSelectedStateId(null);
-            setMobileSheet(null);
+            setActivePanel(null);
           }}
         >
           {selectedState && (
@@ -618,7 +678,7 @@ export default function BuilderPage() {
                 onClick={() => {
                   removeState(selectedState.id);
                   setSelectedStateId(null);
-                  setMobileSheet(null);
+                  setActivePanel(null);
                 }}
                 className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-danger/30 py-2 text-xs font-semibold text-danger hover:bg-danger-soft"
               >
@@ -629,9 +689,10 @@ export default function BuilderPage() {
         </MobileSheet>
 
         <MobileSheet
-          open={mobileSheet === 'simulator'}
+          open={activePanel === 'simulator'}
           title="Simulator"
-          onClose={() => setMobileSheet(null)}
+          onClose={() => setActivePanel(null)}
+          side={isCanvasFullscreen}
         >
           <BuilderSimulator
             automaton={automaton}
@@ -640,9 +701,10 @@ export default function BuilderPage() {
         </MobileSheet>
 
         <MobileSheet
-          open={mobileSheet === 'table'}
+          open={activePanel === 'table'}
           title="Transition Table"
-          onClose={() => setMobileSheet(null)}
+          onClose={() => setActivePanel(null)}
+          side={isCanvasFullscreen}
         >
           <BuilderTable
             tableData={getTransitionTable()}
@@ -658,16 +720,29 @@ export default function BuilderPage() {
           fullscreen would otherwise be unreachable on any device. */}
       <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
         <TransitionModal
-          open={transitionModalOpen}
-          onClose={() => setTransitionModalOpen(false)}
+          open={transitionModalOpen && activePanel === 'transitionDetails'}
+          onClose={() => {
+            setTransitionModalOpen(false);
+            setActivePanel(null);
+          }}
           fromState={stateById[pendingFromId]}
           toState={stateById[pendingToId]}
           existingSymbols={existingSymbols}
           alphabet={automaton.alphabet}
           onSave={handleSaveTransitionModal}
           onDelete={handleDeleteTransitionModal}
+          sourceConnectorId={pendingSourceConnectorId}
+          targetConnectorId={pendingTargetConnectorId}
+          transitions={automaton.transitions}
+          editingTransitionId={editingTransitionId}
         />
       </FullscreenPortal>
+
+      {toast && (
+        <div role="status" className="fixed bottom-5 left-1/2 z-[100] -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow-lift dark:bg-white dark:text-ink">
+          {toast}
+        </div>
+      )}
 
       {/* Clear Confirmation Modal */}
       <Modal
@@ -689,6 +764,8 @@ export default function BuilderPage() {
                 clearAll();
                 setSelectedStateId(null);
                 setSelectedTransitionKey(null);
+                setActivePanel(null);
+                setCanvasResetVersion(version => version + 1);
                 setClearModalOpen(false);
               }}
             >

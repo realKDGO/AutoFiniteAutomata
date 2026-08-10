@@ -55,7 +55,7 @@ export const VISIBILITY_DISTANCE = 90;
  * 8 compass point descriptors in clockwise order starting from North.
  * Each entry: { id (0-7), label, angleDeg }
  */
-const COMPASS_POINTS = [
+export const CONNECTOR_POINTS = [
   { id: 0, label: 'north',      angleDeg: 270 },
   { id: 1, label: 'north-east', angleDeg: 315 },
   { id: 2, label: 'east',       angleDeg:   0 },
@@ -76,7 +76,7 @@ const COMPASS_POINTS = [
 export function getStateConnectors(state, radius = CONNECTOR_RADIUS) {
   const { x, y } = state.position ?? { x: 0, y: 0 };
   const r = radius + BOUNDARY_OFFSET;
-  return COMPASS_POINTS.map(({ id, label, angleDeg }) => {
+  return CONNECTOR_POINTS.map(({ id, label, angleDeg }) => {
     const rad = (angleDeg * Math.PI) / 180;
     return {
       id,
@@ -85,6 +85,20 @@ export function getStateConnectors(state, radius = CONNECTOR_RADIUS) {
       y: y + r * Math.sin(rad),
     };
   });
+}
+
+export function connectorLabel(id) {
+  return CONNECTOR_POINTS.find(point => point.id === id)?.label ?? 'connector';
+}
+
+/** Logical endpoint usage. Rendering must never be used as capacity state. */
+export function getConnectorUsage(transitions, stateId, connectorId, excludeTransitionId = null) {
+  return transitions.reduce((count, transition) => {
+    if (transition.id === excludeTransitionId) return count;
+    if (transition.from === stateId && transition.sourceConnectorId === connectorId) count++;
+    if (transition.to === stateId && transition.targetConnectorId === connectorId) count++;
+    return count;
+  }, 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -45,11 +45,27 @@ export function validateAutomaton(automaton) {
 
   // 4. Validate transitions references and deterministic choices
   const dfaTransitionMap = new Map(); // key: `fromId\0symbol` -> targetStateId
+  const connectorUsage = new Map();
 
   for (const t of transitions) {
     if (!stateIds.has(t.from) || !stateIds.has(t.to)) {
       errors.push('Found transition referencing non-existent states.');
       continue;
+    }
+
+    const sourceConnector = t.sourceConnectorId ?? 2;
+    const targetConnector = t.targetConnectorId ?? 6;
+    if (![sourceConnector, targetConnector].every(id => Number.isInteger(id) && id >= 0 && id < 8)) {
+      errors.push('Found transition with an invalid connector.');
+      continue;
+    }
+    if (t.from === t.to && sourceConnector === targetConnector) {
+      errors.push('A loop transition must use two different connectors.');
+      continue;
+    }
+    for (const key of [`${t.from}\0${sourceConnector}`, `${t.to}\0${targetConnector}`]) {
+      connectorUsage.set(key, (connectorUsage.get(key) ?? 0) + 1);
+      if (connectorUsage.get(key) > 2) errors.push('A connector cannot have more than two transition endpoints.');
     }
 
     for (const sym of t.symbols) {

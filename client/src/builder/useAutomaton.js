@@ -1,4 +1,5 @@
 import { useCallback, useReducer } from 'react';
+import { getConnectorUsage } from './connectorSnap';
 
 // ─── ID / Naming Helpers ─────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ const initialAutomaton = {
   alphabet: ['0', '1'],
   stateNaming: 'alphabet', // 'alphabet' | 'q' | 'number'
   states: [],        // [{ id, name, initial, accepting, dead, position: {x,y} }]
-  transitions: [],   // [{ id, from, to, symbols: string[] }]
+  transitions: [],   // [{ id, from, to, sourceConnectorId, targetConnectorId, symbols }]
 };
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
@@ -187,42 +188,44 @@ function automatonReducer(state, action) {
     }
 
     case 'ADD_TRANSITION': {
-      const { from, to, symbols } = action.payload;
+      const { from, to, symbols, sourceConnectorId = 2, targetConnectorId = 6 } = action.payload;
       const cleanSymbols = [...new Set(symbols)].filter(Boolean);
       if (cleanSymbols.length === 0) return state;
-
-      const existing = state.transitions.find(
-        t => t.from === from && t.to === to
-      );
-      if (existing) {
-        return {
-          ...state,
-          transitions: state.transitions.map(t =>
-            t.id === existing.id
-              ? { ...t, symbols: [...new Set([...existing.symbols, ...cleanSymbols])] }
-              : t
-          ),
-        };
-      }
+      if (!state.states.some(s => s.id === from) || !state.states.some(s => s.id === to)) return state;
+      if (![sourceConnectorId, targetConnectorId].every(id => Number.isInteger(id) && id >= 0 && id < 8)) return state;
+      if (from === to && sourceConnectorId === targetConnectorId) return state;
+      if (getConnectorUsage(state.transitions, from, sourceConnectorId) >= 2) return state;
+      if (getConnectorUsage(state.transitions, to, targetConnectorId) >= 2) return state;
       return {
         ...state,
         transitions: [
           ...state.transitions,
-          { id: genId(), from, to, symbols: cleanSymbols },
+          { id: genId(), from, to, sourceConnectorId, targetConnectorId, symbols: cleanSymbols },
         ],
       };
     }
 
     case 'UPDATE_TRANSITION': {
-      const { id, symbols } = action.payload;
+      const { id, symbols, sourceConnectorId, targetConnectorId, from, to } = action.payload;
       const cleanSymbols = [...new Set(symbols)].filter(Boolean);
       if (cleanSymbols.length === 0) {
         return { ...state, transitions: state.transitions.filter(t => t.id !== id) };
       }
+      const current = state.transitions.find(t => t.id === id);
+      if (!current) return state;
+      const nextFrom = from ?? current.from;
+      const nextTo = to ?? current.to;
+      if (!state.states.some(s => s.id === nextFrom) || !state.states.some(s => s.id === nextTo)) return state;
+      const nextSource = sourceConnectorId ?? current.sourceConnectorId ?? 2;
+      const nextTarget = targetConnectorId ?? current.targetConnectorId ?? 6;
+      if (![nextSource, nextTarget].every(connector => Number.isInteger(connector) && connector >= 0 && connector < 8)) return state;
+      if (nextFrom === nextTo && nextSource === nextTarget) return state;
+      if (getConnectorUsage(state.transitions, nextFrom, nextSource, id) >= 2) return state;
+      if (getConnectorUsage(state.transitions, nextTo, nextTarget, id) >= 2) return state;
       return {
         ...state,
         transitions: state.transitions.map(t =>
-          t.id === id ? { ...t, symbols: cleanSymbols } : t
+          t.id === id ? { ...t, from: nextFrom, to: nextTo, symbols: cleanSymbols, sourceConnectorId: nextSource, targetConnectorId: nextTarget } : t
         ),
       };
     }
@@ -247,28 +250,18 @@ function automatonReducer(state, action) {
 
 // ─── Derived Helpers ──────────────────────────────────────────────────────────
 
-/** Groups transitions by (from-id, to-id) for diagram rendering. */
+/** Every transition remains a distinct visual edge: connectors are data, not
+ * a property of a merged SVG path. */
 function buildGroupedEdges(transitions) {
-  const groups = new Map();
-  for (const t of transitions) {
-    const key = `${t.from}\0${t.to}`;
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key,
-        from: t.from,
-        to: t.to,
-        transitionIds: [],
-        labels: [],
-      });
-    }
-    const g = groups.get(key);
-    g.transitionIds.push(t.id);
-    g.labels.push(...t.symbols);
-  }
-  return [...groups.values()].map(g => ({
-    ...g,
-    labels: [...new Set(g.labels)],
-    label: [...new Set(g.labels)].join(', '),
+  return transitions.map(t => ({
+    key: t.id,
+    from: t.from,
+    to: t.to,
+    sourceConnectorId: t.sourceConnectorId ?? 2,
+    targetConnectorId: t.targetConnectorId ?? 6,
+    transitionIds: [t.id],
+    labels: t.symbols,
+    label: t.symbols.join(', '),
   }));
 }
 
@@ -379,13 +372,13 @@ export function useAutomaton() {
     []
   );
   const addTransition = useCallback(
-    (from, to, symbols) =>
-      dispatch({ type: 'ADD_TRANSITION', payload: { from, to, symbols } }),
+    (from, to, symbols, sourceConnectorId = 2, targetConnectorId = 6) =>
+      dispatch({ type: 'ADD_TRANSITION', payload: { from, to, symbols, sourceConnectorId, targetConnectorId } }),
     []
   );
   const updateTransition = useCallback(
-    (id, symbols) =>
-      dispatch({ type: 'UPDATE_TRANSITION', payload: { id, symbols } }),
+    (id, symbols, sourceConnectorId, targetConnectorId, from, to) =>
+      dispatch({ type: 'UPDATE_TRANSITION', payload: { id, symbols, sourceConnectorId, targetConnectorId, from, to } }),
     []
   );
   const removeTransition = useCallback(

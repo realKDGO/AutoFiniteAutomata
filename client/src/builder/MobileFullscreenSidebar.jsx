@@ -1,4 +1,4 @@
-import { MousePointer, Plus, ArrowUpRight, Table, Play, Minimize } from 'lucide-react';
+import { MousePointer, Plus, ArrowUpRight, Table, Play } from 'lucide-react';
 
 /**
  * Mobile fullscreen control rail.
@@ -18,7 +18,7 @@ export default function MobileFullscreenSidebar({
   onAddState,
   onOpenTable,
   onOpenSimulator,
-  onExitFullscreen,
+  activePanel,
 }) {
   const tools = [
     {
@@ -75,7 +75,8 @@ export default function MobileFullscreenSidebar({
         type="button"
         onClick={() => onOpenTable?.()}
         aria-label="Open transition table"
-        className="focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface py-2 text-[10px] font-semibold leading-tight text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark"
+        aria-pressed={activePanel === 'table'}
+        className={`focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border py-2 text-[10px] font-semibold leading-tight ${activePanel === 'table' ? 'border-primary bg-primary text-white shadow-sm' : 'border-line bg-surface text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'}`}
       >
         <Table size={18} />
         Table
@@ -85,23 +86,13 @@ export default function MobileFullscreenSidebar({
         type="button"
         onClick={() => onOpenSimulator?.()}
         aria-label="Open simulator"
-        className="focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface py-2 text-[10px] font-semibold leading-tight text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark"
+        aria-pressed={activePanel === 'simulator'}
+        className={`focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border py-2 text-[10px] font-semibold leading-tight ${activePanel === 'simulator' ? 'border-primary bg-primary text-white shadow-sm' : 'border-line bg-surface text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'}`}
       >
         <Play size={18} />
         Sim
       </button>
 
-      <div className="my-1 h-px w-full bg-line dark:bg-line-dark" />
-
-      <button
-        type="button"
-        onClick={() => onExitFullscreen?.()}
-        aria-label="Exit fullscreen"
-        className="focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border border-line bg-surface py-2 text-[10px] font-semibold leading-tight text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark"
-      >
-        <Minimize size={18} />
-        Exit
-      </button>
     </div>
   );
 }
