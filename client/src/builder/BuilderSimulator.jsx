@@ -1,186 +1,197 @@
-import { useState } from 'react';
-import { Play, SkipForward, RotateCcw, CheckCircle2, XCircle } from 'lucide-react';
+import { Pause, Play, RotateCcw, SkipForward, Lock } from 'lucide-react';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import { SIMULATION_SPEEDS } from './useBuilderSimulation';
 
-export default function BuilderSimulator({ automaton, toSimulatorAutomaton }) {
-  const [inputStr, setInputStr] = useState('');
-  const [stepIndex, setStepIndex] = useState(-1);
-  const [simulationState, setSimulationState] = useState(null);
-  const [error, setError] = useState('');
+const STATUS_LABELS = {
+  IDLE:     'Ready',
+  RUNNING:  'Running',
+  PAUSED:   'Paused',
+  ACCEPTED: 'ACCEPT',
+  REJECTED: 'REJECT',
+};
 
-  const simModel = toSimulatorAutomaton();
+/** Returns resolved state representation for single state or NFA state set. */
+function resolveCurrentStateText(session, stateById) {
+  const activeIds = session?.currentStates?.length
+    ? session.currentStates
+    : session?.currentStateId
+      ? [session.currentStateId]
+      : [];
 
-  const handleRun = () => {
-    setError('');
-    const initial = automaton.states.find(s => s.initial);
+  if (!activeIds.length || !stateById) return '—';
 
-    if (!initial) {
-      setError('Cannot simulate: No initial state designated.');
-      setSimulationState(null);
-      setStepIndex(-1);
-      return;
-    }
+  const names = activeIds.map(id => {
+    const s = stateById[id];
+    if (!s) return id;
+    return `${s.name}${s.dead ? ' (dead)' : ''}`;
+  });
 
-    // Validate symbols
-    for (const char of inputStr) {
-      if (!automaton.alphabet.includes(char)) {
-        setError(`Invalid input: symbol '${char}' is not in the alphabet {${automaton.alphabet.join(', ')}}.`);
-        setSimulationState(null);
-        setStepIndex(-1);
-        return;
-      }
-    }
+  return names.join(', ');
+}
 
-    // Perform full simulation computation locally
-    const steps = [];
-    let currentSet = new Set([initial.name]);
-    steps.push({ step: 0, symbol: 'ε (start)', states: [...currentSet] });
+export default function BuilderSimulator({ simulation, stateById }) {
+  const { session, speed, setSpeed, setInput, play, pause, nextStep, reset, simulationActive } = simulation;
+  const terminal      = session.status === 'ACCEPTED' || session.status === 'REJECTED';
+  const status        = session.isDead && !terminal ? 'DEAD' : STATUS_LABELS[session.status];
+  const currentStateText = resolveCurrentStateText(session, stateById);
+  const isAccepted    = session.status === 'ACCEPTED';
+  const isRejected    = session.status === 'REJECTED';
 
-    let isBlocked = false;
-
-    for (let i = 0; i < inputStr.length; i++) {
-      const sym = inputStr[i];
-      const nextSet = new Set();
-
-      for (const st of currentSet) {
-        const target = simModel.transitions[st]?.[sym];
-        if (target) {
-          if (Array.isArray(target)) {
-            target.forEach(t => nextSet.add(t));
-          } else {
-            nextSet.add(target);
-          }
-        }
-      }
-
-      if (nextSet.size === 0) {
-        isBlocked = true;
-      }
-
-      currentSet = nextSet;
-      steps.push({ step: i + 1, symbol: sym, states: [...currentSet] });
-    }
-
-    const acceptingSet = new Set(simModel.acceptingStates);
-    const accepted = [...currentSet].some(st => acceptingSet.has(st));
-
-    const simResult = {
-      steps,
-      finalStates: [...currentSet],
-      accepted,
-      isBlocked,
-    };
-
-    setSimulationState(simResult);
-    setStepIndex(steps.length - 1);
-  };
-
-  const handleStep = () => {
-    if (!simulationState) {
-      handleRun();
-      setStepIndex(0);
-      return;
-    }
-
-    if (stepIndex < simulationState.steps.length - 1) {
-      setStepIndex(prev => prev + 1);
-    }
-  };
-
-  const handleReset = () => {
-    setStepIndex(-1);
-    setSimulationState(null);
-    setError('');
-  };
-
-  const currentStepInfo =
-    simulationState && stepIndex >= 0 ? simulationState.steps[stepIndex] : null;
+  const statusColor = isAccepted
+    ? 'text-emerald-700 dark:text-emerald-300'
+    : isRejected
+      ? 'text-danger'
+      : session.isDead
+        ? 'text-amber-700 dark:text-amber-300'
+        : session.status === 'RUNNING'
+          ? 'text-primary'
+          : 'text-ink-soft dark:text-ink-darkMuted';
 
   return (
     <div className="space-y-4">
+
+      {/* ── Input + speed ── */}
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-[200px]">
+        <div className="min-w-[180px] flex-1">
           <Input
             label="Input String"
-            value={inputStr}
-            onChange={e => {
-              setInputStr(e.target.value);
-              handleReset();
-            }}
+            value={session.input}
+            onChange={event => setInput(event.target.value)}
             placeholder="e.g. 0101"
+            disabled={session.status === 'RUNNING' || session.isAnimating}
           />
         </div>
-        <div className="flex gap-2">
-          <Button type="button" onClick={handleRun} size="sm">
-            <Play size={16} /> Run
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleStep}
-            size="sm"
-            disabled={simulationState && stepIndex >= simulationState.steps.length - 1}
+        <label className="space-y-1 text-xs font-bold uppercase tracking-wider text-ink-soft">
+          Speed
+          <select
+            value={speed}
+            onChange={event => setSpeed(event.target.value)}
+            className="block w-full rounded-lg border border-line bg-surface px-2 py-2 text-xs font-semibold normal-case tracking-normal dark:border-line-dark dark:bg-surface-dark"
           >
-            <SkipForward size={16} /> Step
+            {Object.keys(SIMULATION_SPEEDS).map(value => (
+              <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {/* ── Controls ── */}
+      <div className="flex flex-wrap gap-2">
+        {session.isPlaying ? (
+          <Button type="button" size="sm" variant="secondary" onClick={pause}>
+            <Pause size={16} /> Pause
           </Button>
-          <Button type="button" variant="ghost" onClick={handleReset} size="sm">
-            <RotateCcw size={16} /> Reset
+        ) : (
+          <Button type="button" size="sm" onClick={play} disabled={terminal || session.isAnimating}>
+            <Play size={16} /> {session.status === 'PAUSED' ? 'Resume' : 'Run'}
           </Button>
+        )}
+        <Button type="button" size="sm" variant="secondary" onClick={nextStep} disabled={session.isAnimating || terminal}>
+          <SkipForward size={16} /> Next Step
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={reset}>
+          <RotateCcw size={16} /> Reset
+        </Button>
+      </div>
+
+      {/* Editing-locked notice (only while actively running/paused/animating) */}
+      {simulationActive && (
+        <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+          <Lock size={12} />
+          Canvas editing is locked — reset simulation to edit.
+        </div>
+      )}
+
+      {/* ── Input tape ── */}
+      <div className="rounded-xl border border-line bg-surface-muted p-3 dark:border-line-dark dark:bg-canvas-dark">
+        <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+          <span className="font-bold uppercase tracking-wider text-ink-soft">Input tape</span>
+          <span className={`font-bold ${statusColor}`}>{status}</span>
+        </div>
+
+        {session.input ? (
+          <div
+            className="flex flex-wrap gap-1"
+            aria-label={`Input tape, position ${session.index} of ${session.input.length}`}
+          >
+            {[...session.input].map((symbol, index) => (
+              <span
+                key={`${symbol}-${index}`}
+                className={`grid h-8 w-8 place-items-center rounded-md border font-mono text-sm font-bold transition-colors ${
+                  index === session.index && !terminal
+                    ? 'border-amber-400 bg-amber-400 text-white shadow-sm'
+                    : index < session.index
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+                      : 'border-line bg-surface text-ink dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'
+                }`}
+              >
+                {symbol}
+              </span>
+            ))}
+            {terminal && <span className="ml-1 self-center text-xs font-semibold text-ink-muted">Complete</span>}
+          </div>
+        ) : (
+          <p className="text-sm text-ink-muted dark:text-ink-darkMuted">
+            Empty input — the initial state will be evaluated.
+          </p>
+        )}
+      </div>
+
+      {/* ── Current state info ── */}
+      <div className="grid grid-cols-2 gap-3 rounded-xl border border-line p-3 text-xs dark:border-line-dark">
+        <div>
+          <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-soft">Current state</span>
+          <span className="font-mono font-bold text-ink dark:text-ink-dark">
+            <span className={session.isDead ? 'text-red-600 dark:text-red-400' : 'text-ink dark:text-ink-dark'}>
+              {currentStateText}
+            </span>
+          </span>
+        </div>
+        <div>
+          <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-soft">Progress</span>
+          <span className="font-mono font-bold text-ink dark:text-ink-dark">
+            {session.index} / {session.input.length}
+          </span>
         </div>
       </div>
 
-      {error && <p className="text-sm font-medium text-danger">{error}</p>}
+      {/* ── Active symbol callout ── */}
+      {session.activeSymbol && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
+          <span className="grid h-6 w-6 place-items-center rounded border border-amber-400 bg-amber-400 font-mono text-sm font-bold text-white">
+            {session.activeSymbol}
+          </span>
+          <span className="font-semibold text-amber-800 dark:text-amber-300">
+            Reading symbol and following transition…
+          </span>
+        </div>
+      )}
 
-      {simulationState && currentStepInfo && (
-        <div className="rounded-xl border border-line bg-surface-muted p-4 space-y-3 dark:border-line-dark dark:bg-canvas-dark text-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2 dark:border-line-dark">
-            <span className="font-semibold text-ink dark:text-ink-dark">
-              Step {stepIndex} / {simulationState.steps.length - 1}
-            </span>
-            <span className="font-mono text-xs">
-              Current Symbol:{' '}
-              <b className="text-primary font-bold">{currentStepInfo.symbol}</b>
-            </span>
-          </div>
+      {/* ── Error message ── */}
+      {session.error && (
+        <p className="text-xs font-medium text-danger">{session.error}</p>
+      )}
 
-          <div className="grid grid-cols-2 gap-4 text-xs font-mono">
-            <div>
-              <span className="text-ink-soft uppercase text-[10px] font-bold block">Current State(s)</span>
-              <span className="font-bold text-sm text-ink dark:text-ink-dark">
-                {currentStepInfo.states.length > 0
-                  ? `{ ${currentStepInfo.states.join(', ')} }`
-                  : '∅ (Trap/Dead)'}
-              </span>
-            </div>
-            <div>
-              <span className="text-ink-soft uppercase text-[10px] font-bold block">Progress</span>
-              <span className="text-ink dark:text-ink-dark">
-                {inputStr.slice(0, Math.max(0, stepIndex))}
-                <u className="text-primary font-bold">{inputStr[stepIndex - 1] ?? ''}</u>
-                {inputStr.slice(stepIndex)}
-              </span>
-            </div>
-          </div>
-
-          {stepIndex === simulationState.steps.length - 1 && (
-            <div
-              className={`flex items-center gap-2 p-3 rounded-lg font-bold text-sm ${
-                simulationState.accepted
-                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                  : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
-              }`}
-            >
-              {simulationState.accepted ? (
-                <>
-                  <CheckCircle2 size={18} /> ACCEPT
-                </>
-              ) : (
-                <>
-                  <XCircle size={18} /> REJECT
-                </>
-              )}
-            </div>
+      {/* ── Terminal result banner ── */}
+      {terminal && (
+        <div className={`rounded-xl p-4 text-center ${
+          isAccepted
+            ? 'bg-emerald-100 dark:bg-emerald-950/50'
+            : 'bg-red-100 dark:bg-red-950/50'
+        }`}>
+          <p className={`text-xl font-black tracking-wide ${
+            isAccepted ? 'text-emerald-700 dark:text-emerald-300' : 'text-red-700 dark:text-red-400'
+          }`}>
+            {session.result}
+          </p>
+          <p className="mt-1 text-xs text-ink-muted dark:text-ink-darkMuted">
+            Final state: <strong className="font-mono">{currentStateText}</strong>
+          </p>
+          {session.input.length > 0 && (
+            <p className="mt-0.5 text-xs text-ink-muted dark:text-ink-darkMuted">
+              Input: <strong className="font-mono">{session.input}</strong>
+            </p>
           )}
         </div>
       )}

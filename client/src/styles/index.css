@@ -1,8 +1,96 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-:root { --diagram-node: #ffffff; --diagram-stroke: #607083; --diagram-text: #17212b; --diagram-edge: #607083; --diagram-label: #ffffff; --diagram-active: #1683d8; --diagram-active-soft: #eaf5fd; --diagram-dead: #c94c4c; --diagram-dead-soft: #fff0f0; }
-.dark { --diagram-node: #17212d; --diagram-stroke: #a9b7c6; --diagram-text: #e6edf5; --diagram-edge: #a9b7c6; --diagram-label: #17212d; --diagram-active: #73b8eb; --diagram-active-soft: #133c59; --diagram-dead: #f08a8a; --diagram-dead-soft: #48252a; }
+:root { --diagram-node: #ffffff; --diagram-stroke: #607083; --diagram-text: #17212b; --diagram-edge: #607083; --diagram-label: #ffffff; --diagram-active: #1683d8; --diagram-active-soft: #eaf5fd; --diagram-dead: #c94c4c; --diagram-dead-soft: #fff0f0; --diagram-sim-current: #f59e0b; --diagram-sim-current-soft: #fffbeb; }
+.dark { --diagram-node: #17212d; --diagram-stroke: #a9b7c6; --diagram-text: #e6edf5; --diagram-edge: #a9b7c6; --diagram-label: #17212d; --diagram-active: #73b8eb; --diagram-active-soft: #133c59; --diagram-dead: #f08a8a; --diagram-dead-soft: #48252a; --diagram-sim-current: #fbbf24; --diagram-sim-current-soft: #1c1507; }
+@keyframes sim-pulse { 0% { stroke-dashoffset: 0; opacity: 0.7; } 50% { opacity: 1; } 100% { stroke-dashoffset: 24; opacity: 0.7; } }
 @layer base { html { @apply scroll-smooth; } body { @apply min-h-screen bg-canvas font-sans text-ink antialiased selection:bg-primary-soft selection:text-primary-hover dark:bg-canvas-dark dark:text-ink-dark; } input, select, textarea { @apply transition-colors duration-200; } }
 @layer components { .focus-ring { @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-ring focus-visible:ring-offset-2 focus-visible:ring-offset-canvas dark:focus-visible:ring-offset-canvas-dark; } .eyebrow { @apply text-xs font-bold uppercase tracking-[0.2em] text-primary; } .section-card { @apply rounded-2xl border border-line bg-surface shadow-card dark:border-line-dark dark:bg-surface-dark; } .data-table tbody tr:nth-child(even) { @apply bg-surface-muted/70 dark:bg-surface-darkMuted/40; } .data-table tbody tr { @apply transition-colors hover:bg-primary-soft/50 dark:hover:bg-primary/10; } }
+
+/* Dynamic-viewport-safe app shell height: 100vh first as a fallback for
+   browsers/WebViews without dvh support (an invalid `dvh` declaration is
+   simply discarded, leaving the vh value in place), then 100dvh so mobile
+   browser/Android WebView chrome showing/hiding doesn't jump the layout. */
+.app-shell-min-h { min-height: 100vh; min-height: 100dvh; }
+
+/* ── Mobile / touch-device native-app polish ──────────────────────────────
+   Everything below is scoped to the app's existing mobile/tablet breakpoint
+   (max-width: 1023px, matching MOBILE_QUERY in BuilderCanvas.jsx) so desktop
+   scrollbars, text selection, zoom, and transitions are completely
+   unaffected. Scrolling itself is never disabled — only the scrollbar's
+   visibility, and (only on non-input/editable chrome) accidental
+   long-press text selection / callouts. */
+@media (max-width: 1023px) {
+  /* Hide scrollbars everywhere (Builder canvas, tables, modals, sheets,
+     sidebars...) while keeping the underlying overflow/scroll behavior
+     exactly as each component already defines it. */
+  * {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* old Edge/IE */
+  }
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /* Momentum scrolling on older iOS WebKit + stop pull-to-refresh/rubber-band
+     scroll chaining from fighting nested scroll containers (canvas, sheets,
+     tables all sitting inside the page). */
+  html, body {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    /* Belt-and-braces alongside the viewport meta tag: restrict the page to
+       panning only, so pinch-zoom / double-tap-zoom on the page chrome
+       never engages. This does not touch individual elements (like the
+       Builder SVG canvas) that set their own touch-action inline. */
+    touch-action: pan-x pan-y;
+  }
+
+  /* Prevent accidental text-selection / native callouts on ordinary app
+     chrome (buttons, nav, headers/footers, labels) so long-pressing a
+     button feels like a native control instead of triggering a copy menu.
+     Deliberately scoped to chrome containers rather than the whole body, so
+     legitimate user-facing content (results, generated tables, etc.) stays
+     selectable/copyable by default. */
+  nav, header, footer, aside,
+  button, [role="button"], a.focus-ring {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Inputs, textareas, and anything explicitly marked selectable must always
+     stay fully selectable/copyable — this unconditionally wins over the
+     rule above regardless of DOM nesting. */
+  input, textarea, select, [contenteditable="true"], .select-text {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+
+  /* Stop the native "save/share image" long-press callout and drag-ghost
+     on images (logo, etc.) without touching real content selection. */
+  img {
+    -webkit-touch-callout: none;
+    -webkit-user-drag: none;
+    user-drag: none;
+  }
+
+  /* Short, native-feeling fade+rise on route changes. Keyed by pathname in
+     AppLayout so it replays on every navigation without needing an
+     animation library or touching Builder's internal canvas state. */
+  .mobile-page-transition {
+    animation: mobile-page-fade 220ms ease-out;
+  }
+}
+
+@keyframes mobile-page-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-page-transition { animation: none; }
+}

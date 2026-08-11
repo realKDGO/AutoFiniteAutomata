@@ -1,8 +1,7 @@
 export function getArrowColor(edge, alphabet = ['0', '1']) {
   const symbols = edge.labels ?? [];
-  
-  // Get index of symbol in alphabet if provided, else rely on symbol string checks
-  const getSymbolIndex = (sym) => {
+
+  const getSymbolIndex = sym => {
     const idx = alphabet.indexOf(sym);
     if (idx !== -1) return idx;
     if (sym === '0' || sym === 'a' || sym === 'A') return 0;
@@ -15,39 +14,52 @@ export function getArrowColor(edge, alphabet = ['0', '1']) {
 
   const indices = new Set(symbols.map(getSymbolIndex));
 
-  // Blue for looping (contains both 1st and 2nd symbol, e.g. 0 & 1 or A & B)
-  if (indices.has(0) && indices.has(1)) {
-    return { name: 'blue', hex: '#3b82f6' };
-  }
-
-  // Check lowest index symbol present if single or single-category
-  if (indices.has(0)) return { name: 'red', hex: '#ef4444' };
-  if (indices.has(1)) return { name: 'green', hex: '#22c55e' };
-  if (indices.has(2)) return { name: 'cyan', hex: '#06b6d4' };
+  if (indices.has(0) && indices.has(1)) return { name: 'blue',    hex: '#3b82f6' };
+  if (indices.has(0)) return { name: 'red',     hex: '#ef4444' };
+  if (indices.has(1)) return { name: 'green',   hex: '#22c55e' };
+  if (indices.has(2)) return { name: 'cyan',    hex: '#06b6d4' };
   if (indices.has(3)) return { name: 'magenta', hex: '#d946ef' };
-  if (indices.has(4)) return { name: 'yellow', hex: '#eab308' };
-
+  if (indices.has(4)) return { name: 'yellow',  hex: '#eab308' };
   return { name: 'default', hex: '#607083' };
 }
 
-export default function TransitionEdge({ edge, geometry, active, alphabet }) {
+/**
+ * @param {object}   props
+ * @param {object}   props.edge                   — edge data
+ * @param {object}   props.geometry               — { path, label, start, end }
+ * @param {Set}      props.active                 — editor-selection active set
+ * @param {string[]} props.alphabet
+ * @param {boolean}  [props.simActive]            — true while transition is animated by simulator
+ * @param {Function} [props.onEndpointPointerDown] — callback for initiating endpoint drag
+ */
+export default function TransitionEdge({ edge, geometry, active, alphabet, simActive = false, onEndpointPointerDown }) {
   const activeEdge = edge.labels.some(label =>
     active.has(`${edge.from}\0${edge.to}\0${label}`)
   );
 
   const edgeColorInfo = getArrowColor(edge, alphabet);
-  const strokeColor = activeEdge ? '#1683d8' : edgeColorInfo.hex;
-  const markerId = activeEdge ? 'autofa-arrowhead' : `autofa-arrowhead-${edgeColorInfo.name}`;
-  const labelWidth = Math.max(34, edge.label.length * 7.2);
 
-  // Show ε correctly for epsilon transitions
-  const displayLabel = edge.label;
+  const strokeColor = simActive
+    ? '#f59e0b'
+    : activeEdge
+      ? '#1683d8'
+      : edgeColorInfo.hex;
+
+  // Select matching arrowhead marker so the arrowhead fill matches strokeColor!
+  const markerId = simActive
+    ? 'autofa-arrowhead-sim'
+    : activeEdge
+      ? 'autofa-arrowhead-selected'
+      : `autofa-arrowhead-${edgeColorInfo.name}`;
+
+  const strokeWidth = simActive ? 3.5 : activeEdge ? 2.8 : 2;
+  const labelWidth  = Math.max(34, edge.label.length * 7.2);
 
   return (
     <g>
-      <title>{`Transition from ${edge.from} to ${edge.to} on input ${displayLabel}`}</title>
+      <title>{`Transition from ${edge.from} to ${edge.to} on input ${edge.label}`}</title>
 
-      {/* Wider invisible hit target for usability — covers body + arrowhead */}
+      {/* Wider invisible hit target for edge body */}
       <path
         d={geometry.path}
         fill="none"
@@ -57,21 +69,35 @@ export default function TransitionEdge({ edge, geometry, active, alphabet }) {
         pointerEvents="stroke"
       />
 
-      {/* Small extra hit circle right at the arrow tip */}
+      {/* Invisible hit target circle at arrow tip for initiating endpoint drag */}
       <circle
         cx={geometry.end?.x ?? geometry.label.x}
         cy={geometry.end?.y ?? geometry.label.y}
-        r="10"
+        r="12"
         fill="transparent"
         pointerEvents="all"
+        onPointerDown={onEndpointPointerDown}
       />
 
-      {/* Visible arrow */}
+      {/* Simulation glow layer (amber halo beneath active transition arrow) */}
+      {simActive && (
+        <path
+          d={geometry.path}
+          fill="none"
+          stroke="#f59e0b"
+          strokeWidth="9"
+          strokeLinecap="round"
+          opacity="0.3"
+          pointerEvents="none"
+        />
+      )}
+
+      {/* Visible arrow (markerEnd arrowhead fill ALWAYS matches strokeColor!) */}
       <path
         d={geometry.path}
         fill="none"
         stroke={strokeColor}
-        strokeWidth={activeEdge ? 2.8 : 2}
+        strokeWidth={strokeWidth}
         markerEnd={`url(#${markerId})`}
       />
 
@@ -82,7 +108,7 @@ export default function TransitionEdge({ edge, geometry, active, alphabet }) {
         width={labelWidth}
         height={18}
         rx={5}
-        fill="var(--diagram-label)"
+        fill={simActive ? '#fef3c7' : 'var(--diagram-label)'}
       />
       <text
         x={geometry.label.x}
@@ -91,7 +117,7 @@ export default function TransitionEdge({ edge, geometry, active, alphabet }) {
         fill={strokeColor}
         className="text-[11px] font-medium"
       >
-        {displayLabel}
+        {edge.label}
       </text>
     </g>
   );

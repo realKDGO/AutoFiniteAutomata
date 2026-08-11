@@ -18,6 +18,7 @@ import Modal from '../components/ui/Modal';
 import MobileSheet from '../components/ui/MobileSheet';
 import FullscreenPortal from '../components/ui/FullscreenPortal';
 import { useAutomaton } from '../builder/useAutomaton';
+import { useBuilderSimulation } from '../builder/useBuilderSimulation';
 import { validateAutomaton } from '../builder/builderValidator';
 import BuilderCanvas from '../builder/BuilderCanvas';
 import BuilderTable from '../builder/BuilderTable';
@@ -50,6 +51,10 @@ export default function BuilderPage() {
     canUndo,
     canRedo,
   } = useAutomaton();
+
+  // ── Simulation hook ────────────────────────────────────────────────────────
+  const simulation = useBuilderSimulation(automaton);
+  const { simulationActive } = simulation;
 
   // Active Tool state
   const [activeTool, setActiveTool] = useState('select'); // 'select' | 'move' | 'transition'
@@ -349,12 +354,13 @@ export default function BuilderPage() {
           <Card className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" onClick={() => {
+                if (simulationActive) { showToast('Reset the simulation before editing the automaton.'); return; }
                 if (isMobileViewport && !isCanvasFullscreen) {
                   showToast('This feature is only available in Fullscreen mode.');
                   return;
                 }
                 addState();
-              }} size="sm">
+              }} size="sm" disabled={simulationActive}>
                 <Plus size={16} /> Add State
               </Button>
 
@@ -374,7 +380,9 @@ export default function BuilderPage() {
 
               <button
                 type="button"
+                disabled={simulationActive}
                 onClick={() => {
+                  if (simulationActive) { showToast('Reset the simulation before editing the automaton.'); return; }
                   if (isMobileViewport && !isCanvasFullscreen) {
                     showToast('This feature is only available in Fullscreen mode.');
                     return;
@@ -382,9 +390,11 @@ export default function BuilderPage() {
                   activateTool('transition');
                 }}
                 className={`focus-ring inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                  activeTool === 'transition'
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'border border-line bg-surface hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark'
+                  simulationActive
+                    ? 'cursor-not-allowed border border-line bg-surface opacity-40 dark:border-line-dark dark:bg-surface-dark'
+                    : activeTool === 'transition'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'border border-line bg-surface hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark'
                 }`}
               >
                 <ArrowUpRight size={14} /> Create Transition
@@ -402,6 +412,7 @@ export default function BuilderPage() {
               activePanel={activePanel}
               selectedStateId={selectedStateId}
               selectedTransitionKey={selectedTransitionKey}
+              simulation={simulation}
               onSelectState={id => {
                 setSelectedStateId(id);
                 setSelectedTransitionKey(null);
@@ -578,8 +589,8 @@ export default function BuilderPage() {
           <Card className="space-y-4">
             <h3 className="font-display font-semibold text-base">Simulator</h3>
             <BuilderSimulator
-              automaton={automaton}
-              toSimulatorAutomaton={toSimulatorAutomaton}
+              simulation={simulation}
+              stateById={stateById}
             />
           </Card>
         </div>
@@ -695,8 +706,8 @@ export default function BuilderPage() {
           side={isCanvasFullscreen}
         >
           <BuilderSimulator
-            automaton={automaton}
-            toSimulatorAutomaton={toSimulatorAutomaton}
+            simulation={simulation}
+            stateById={stateById}
           />
         </MobileSheet>
 
@@ -744,36 +755,38 @@ export default function BuilderPage() {
         </div>
       )}
 
-      {/* Clear Confirmation Modal */}
-      <Modal
-        open={clearModalOpen}
-        title="Clear Automaton?"
-        onClose={() => setClearModalOpen(false)}
-      >
-        <div className="space-y-4 text-sm">
-          <p className="text-ink-muted dark:text-ink-darkMuted">
-            This will permanently remove all states and transitions from your current Builder session.
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setClearModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                clearAll();
-                setSelectedStateId(null);
-                setSelectedTransitionKey(null);
-                setActivePanel(null);
-                setCanvasResetVersion(version => version + 1);
-                setClearModalOpen(false);
-              }}
-            >
-              Clear Canvas
-            </Button>
+      {/* Clear Confirmation Modal — portaled into fullscreen root when fullscreen is active */}
+      <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+        <Modal
+          open={clearModalOpen}
+          title="Clear Automaton?"
+          onClose={() => setClearModalOpen(false)}
+        >
+          <div className="space-y-4 text-sm">
+            <p className="text-ink-muted dark:text-ink-darkMuted">
+              This will permanently remove all states and transitions from your current Builder session.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setClearModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  clearAll();
+                  setSelectedStateId(null);
+                  setSelectedTransitionKey(null);
+                  setActivePanel(null);
+                  setCanvasResetVersion(version => version + 1);
+                  setClearModalOpen(false);
+                }}
+              >
+                Clear Canvas
+              </Button>
+            </div>
           </div>
-        </div>
-      </Modal>
+        </Modal>
+      </FullscreenPortal>
     </PageContainer>
   );
 }
