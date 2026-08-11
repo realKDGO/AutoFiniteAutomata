@@ -7,8 +7,6 @@ import {
   MousePointer,
   ArrowUpRight,
   ShieldAlert,
-  Play,
-  Table,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import Card from '../components/ui/Card';
@@ -127,6 +125,14 @@ export default function BuilderPage() {
   };
 
   const togglePanel = panel => {
+    if ((panel === 'table' || panel === 'simulator') && isMobileViewport && !isCanvasFullscreen) {
+      showToast(
+        panel === 'table'
+          ? 'Table is only available in Fullscreen mode.'
+          : 'Simulation is only available in Fullscreen mode.'
+      );
+      return;
+    }
     if (activePanel === panel) {
       setActivePanel(null);
       return;
@@ -596,37 +602,13 @@ export default function BuilderPage() {
         </div>
       </div>
 
-      {/* Mobile floating controls — Simulator & Transition Table.
-          Kept out of the way in the safe-area bottom-right corner in
-          normal mobile mode. In fullscreen, the mobile sidebar already
-          exposes Table/Simulator, so this pair is redundant there and would
-          overlap the canvas — the portal below re-parents this whole block
-          inside the fullscreen root but the buttons stay hidden via the
-          sidebar taking over that job, so just skip rendering them while
-          fullscreen. */}
-      {!isCanvasFullscreen && (
-        <div
-          className="fixed bottom-4 right-4 z-30 flex flex-col gap-3 lg:hidden"
-          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
-        >
-          <button
-            type="button"
-            onClick={() => togglePanel('table')}
-            className="focus-ring flex h-12 w-12 items-center justify-center rounded-full bg-surface text-primary shadow-lift border border-line dark:border-line-dark dark:bg-surface-dark"
-            aria-label="Open transition table"
-          >
-            <Table size={20} />
-          </button>
-          <button
-            type="button"
-            onClick={() => togglePanel('simulator')}
-            className="focus-ring flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-lift"
-            aria-label="Open simulator"
-          >
-            <Play size={20} />
-          </button>
-        </div>
-      )}
+      {/* Mobile floating Table/Simulator buttons were removed: per the
+          mobile UX spec, Simulation and Table are Fullscreen-only on
+          mobile — the MobileFullscreenSidebar is the only mobile entry
+          point for them (it only renders while isFullscreen && isMobile).
+          togglePanel() above still guards every path defensively with the
+          "only available in Fullscreen mode" toast. Desktop is unaffected —
+          its Simulator/Table live in the right-column Cards above. */}
 
       {/* Mobile contextual state inspector, Simulator sheet, and Table
           sheet. Portaled inside the fullscreen root while fullscreen is
@@ -641,6 +623,7 @@ export default function BuilderPage() {
             setSelectedStateId(null);
             setActivePanel(null);
           }}
+          side
         >
           {selectedState && (
             <div className="space-y-3 text-sm">

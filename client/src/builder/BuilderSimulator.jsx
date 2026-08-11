@@ -103,56 +103,63 @@ export default function BuilderSimulator({ simulation, stateById }) {
         </div>
       )}
 
-      {/* ── Input tape ── */}
-      <div className="rounded-xl border border-line bg-surface-muted p-3 dark:border-line-dark dark:bg-canvas-dark">
-        <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-          <span className="font-bold uppercase tracking-wider text-ink-soft">Input tape</span>
-          <span className={`font-bold ${statusColor}`}>{status}</span>
-        </div>
-
-        {session.input ? (
-          <div
-            className="flex flex-wrap gap-1"
-            aria-label={`Input tape, position ${session.index} of ${session.input.length}`}
-          >
-            {[...session.input].map((symbol, index) => (
-              <span
-                key={`${symbol}-${index}`}
-                className={`grid h-8 w-8 place-items-center rounded-md border font-mono text-sm font-bold transition-colors ${
-                  index === session.index && !terminal
-                    ? 'border-amber-400 bg-amber-400 text-white shadow-sm'
-                    : index < session.index
-                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
-                      : 'border-line bg-surface text-ink dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'
-                }`}
-              >
-                {symbol}
-              </span>
-            ))}
-            {terminal && <span className="ml-1 self-center text-xs font-semibold text-ink-muted">Complete</span>}
+      {/* Input tape + Current state info. Order differs by breakpoint: on
+          mobile the spec wants Current State directly above Input Tape;
+          desktop keeps its original Input Tape → Current State order.
+          Wrapping in a flex column lets `order` reflow them per-breakpoint
+          without duplicating either card's markup. */}
+      <div className="flex flex-col gap-4">
+        {/* ── Input tape ── */}
+        <div className="order-2 lg:order-1 rounded-xl border border-line bg-surface-muted p-3 dark:border-line-dark dark:bg-canvas-dark">
+          <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+            <span className="font-bold uppercase tracking-wider text-ink-soft">Input tape</span>
+            <span className={`font-bold ${statusColor}`}>{status}</span>
           </div>
-        ) : (
-          <p className="text-sm text-ink-muted dark:text-ink-darkMuted">
-            Empty input — the initial state will be evaluated.
-          </p>
-        )}
-      </div>
 
-      {/* ── Current state info ── */}
-      <div className="grid grid-cols-2 gap-3 rounded-xl border border-line p-3 text-xs dark:border-line-dark">
-        <div>
-          <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-soft">Current state</span>
-          <span className="font-mono font-bold text-ink dark:text-ink-dark">
-            <span className={session.isDead ? 'text-red-600 dark:text-red-400' : 'text-ink dark:text-ink-dark'}>
-              {currentStateText}
-            </span>
-          </span>
+          {session.input ? (
+            <div
+              className="flex flex-wrap gap-1"
+              aria-label={`Input tape, position ${session.index} of ${session.input.length}`}
+            >
+              {[...session.input].map((symbol, index) => (
+                <span
+                  key={`${symbol}-${index}`}
+                  className={`grid h-8 w-8 place-items-center rounded-md border font-mono text-sm font-bold transition-colors ${
+                    index === session.index && !terminal
+                      ? 'border-amber-400 bg-amber-400 text-white shadow-sm'
+                      : index < session.index
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+                        : 'border-line bg-surface text-ink dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'
+                  }`}
+                >
+                  {symbol}
+                </span>
+              ))}
+              {terminal && <span className="ml-1 self-center text-xs font-semibold text-ink-muted">Complete</span>}
+            </div>
+          ) : (
+            <p className="text-sm text-ink-muted dark:text-ink-darkMuted">
+              Empty input — the initial state will be evaluated.
+            </p>
+          )}
         </div>
-        <div>
-          <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-soft">Progress</span>
-          <span className="font-mono font-bold text-ink dark:text-ink-dark">
-            {session.index} / {session.input.length}
-          </span>
+
+        {/* ── Current state info ── */}
+        <div className="order-1 lg:order-2 grid grid-cols-2 gap-3 rounded-xl border border-line p-3 text-xs dark:border-line-dark">
+          <div>
+            <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-soft">Current state</span>
+            <span className="font-mono font-bold text-ink dark:text-ink-dark">
+              <span className={session.isDead ? 'text-red-600 dark:text-red-400' : 'text-ink dark:text-ink-dark'}>
+                {currentStateText}
+              </span>
+            </span>
+          </div>
+          <div>
+            <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-soft">Progress</span>
+            <span className="font-mono font-bold text-ink dark:text-ink-dark">
+              {session.index} / {session.input.length}
+            </span>
+          </div>
         </div>
       </div>
 
