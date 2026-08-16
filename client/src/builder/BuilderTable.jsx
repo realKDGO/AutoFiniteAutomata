@@ -3,8 +3,17 @@ import { memo } from 'react';
 function BuilderTable({
   tableData,
   onUpdateCell,
+  simulationActive = false,
 }) {
   const { type, states, alphabet, transitions, stateById } = tableData;
+  // Editing the transition table while a simulation is running/paused/
+  // animating would mutate the automaton out from under the active
+  // animateMotion + activeTransitionId the simulator is tracking. Lock the
+  // table the same way the canvas is locked until the user resets.
+  const guardedUpdateCell = (...args) => {
+    if (simulationActive) return;
+    onUpdateCell(...args);
+  };
 
   if (states.length === 0) {
     return (
@@ -57,11 +66,12 @@ function BuilderTable({
                     <td key={symbol} className="px-4 py-3 sm:px-6 sm:py-4 font-mono">
                       {type === 'DFA' ? (
                         <select
-                          className="focus-ring rounded-md border border-line bg-surface px-2 py-1 text-xs font-mono dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark"
+                          className="focus-ring rounded-md border border-line bg-surface px-2 py-1 text-xs font-mono disabled:cursor-not-allowed disabled:opacity-50 dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark"
                           value={targetStateIds[0] ?? ''}
+                          disabled={simulationActive}
                           onChange={e => {
                             const newToId = e.target.value;
-                            onUpdateCell(state.id, symbol, newToId ? [newToId] : []);
+                            guardedUpdateCell(state.id, symbol, newToId ? [newToId] : []);
                           }}
                         >
                           <option value="">— (none)</option>
@@ -88,13 +98,14 @@ function BuilderTable({
                               <button
                                 key={s.id}
                                 type="button"
+                                disabled={simulationActive}
                                 onClick={() => {
                                   const updated = isSelected
                                     ? targetStateIds.filter(id => id !== s.id)
                                     : [...targetStateIds, s.id];
-                                  onUpdateCell(state.id, symbol, updated);
+                                  guardedUpdateCell(state.id, symbol, updated);
                                 }}
-                                className={`rounded px-1.5 py-0.5 text-xs font-mono transition ${
+                                className={`rounded px-1.5 py-0.5 text-xs font-mono transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                   isSelected
                                     ? 'bg-primary text-white font-bold'
                                     : 'border border-line bg-surface-muted text-ink-muted hover:bg-primary-soft dark:border-line-dark dark:bg-surface-darkMuted'

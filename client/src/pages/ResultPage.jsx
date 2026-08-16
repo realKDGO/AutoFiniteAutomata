@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { CheckCircle2, ChevronDown, LoaderCircle, Play, RotateCcw, XCircle, ArrowRight, Sparkles, Network } from 'lucide-react';
-import { useLocation } from 'react-router-dom';
+import { CheckCircle2, ChevronDown, LoaderCircle, Play, RotateCcw, XCircle, ArrowRight, Sparkles, Network, Pencil } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import StateDiagram from '../components/StateDiagram/StateDiagram';
 import Input from '../components/ui/Input';
 import PageContainer from '../components/PageContainer';
 import { simulateAutomaton, convertNfaToDfa } from '../services/automataApi';
+import { createBuilderAutomatonFromGenerated } from '../builder/automatonStorage';
+import { layoutStates, groupTransitions, loopSide } from '../components/StateDiagram/diagramUtils';
 
 const labels = {
   startsWith: 'Starts with',
@@ -50,6 +52,7 @@ const conditionSummary = condition => {
 
 export default function ResultPage() {
   const { state } = useLocation();
+  const navigate = useNavigate();
   const result = state?.result;
   const request = state?.request;
 
@@ -71,6 +74,7 @@ export default function ResultPage() {
   const [equivInput, setEquivInput] = useState('101');
   const [equivResult, setEquivResult] = useState(null);
   const [equivLoading, setEquivLoading] = useState(false);
+  const [handoffError, setHandoffError] = useState('');
 
   if (!result || !request) {
     return (
@@ -184,6 +188,37 @@ export default function ResultPage() {
     }
   };
 
+  const openInBuilder = () => {
+    setHandoffError('');
+    // Reuse the exact layout/edges the diagram above was just rendered with
+    // (components/StateDiagram/diagramUtils) — and displayAutomaton/
+    // displayTable specifically, since those reflect whatever's actually on
+    // screen (e.g. aliased DFA state names), not the raw engine output —
+    // so the Builder opens with the same states, positions, connector
+    // sides, and labels the user just looked at.
+    const deadStatesList = displayTable.deadStates ?? [];
+    const layout = layoutStates(displayAutomaton, new Set(deadStatesList));
+    const edges = groupTransitions(displayAutomaton);
+    const loopSides = {};
+    for (const edge of edges) {
+      if (edge.from === edge.to) {
+        loopSides[edge.from] = loopSide(edge, layout.positions, edges);
+      }
+    }
+    const builderAutomaton = createBuilderAutomatonFromGenerated({
+      automaton: displayAutomaton,
+      deadStates: deadStatesList,
+      stateNaming: request?.stateNaming ?? 'alphabet',
+      positions: layout.positions,
+      loopSides,
+    });
+    if (!builderAutomaton) {
+      setHandoffError('Unable to open this automaton in Builder. Please try generating it again.');
+      return;
+    }
+    navigate('/builder', { state: { generatorTransfer: { automaton: builderAutomaton } } });
+  };
+
   return (
     <PageContainer className="max-w-6xl">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -201,11 +236,15 @@ export default function ResultPage() {
               Convert NFA → DFA
             </Button>
           )}
+          <Button onClick={openInBuilder}>
+            <Pencil size={16} /> Open in Builder
+          </Button>
           <Button to="/generate" variant="secondary">
             Create another
           </Button>
         </div>
       </div>
+      {handoffError && <p role="alert" className="mt-4 text-sm text-red-600">{handoffError}</p>}
 
       {/* Tabs if converted */}
       {conversionData && (

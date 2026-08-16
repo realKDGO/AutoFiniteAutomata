@@ -42,7 +42,10 @@ export function optimizeAutomaton(automaton, options = {}) {
 
     const validation = validateAutomaton(renamed, 'dfa');
     if (!validation.valid) {
-      throw new Error(`Automaton optimization produced invalid DFA: ${validation.issues.join(', ')}`);
+      const error = new Error(`Automaton optimization produced invalid DFA: ${validation.issues.join(', ')}`);
+      error.statusCode = 400;
+      error.expose = true;
+      throw error;
     }
 
     return renamed;
@@ -53,7 +56,10 @@ export function optimizeAutomaton(automaton, options = {}) {
 
     const validation = validateAutomaton(renamed, 'nfa');
     if (!validation.valid) {
-      throw new Error(`Automaton optimization produced invalid NFA: ${validation.issues.join(', ')}`);
+      const error = new Error(`Automaton optimization produced invalid NFA: ${validation.issues.join(', ')}`);
+      error.statusCode = 400;
+      error.expose = true;
+      throw error;
     }
 
     return renamed;

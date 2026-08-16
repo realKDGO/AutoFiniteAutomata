@@ -8,6 +8,15 @@ async function request(path, body) {
   const text = await response.text();
   let payload = {};
   try { payload = text ? JSON.parse(text) : {}; } catch { /* Preserve a useful HTTP error below. */ }
+  if (!response.ok && import.meta.env.DEV) {
+    console.error('[AutoFA API error]', JSON.stringify({
+      path,
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: text,
+    }));
+  }
   if (!response.ok) throw new Error(payload.error?.message ?? `The AutoFA API returned ${response.status}. Please try again.`);
   if (!payload.data) throw new Error('The AutoFA API returned an incomplete response. Please try again.');
   return payload.data;

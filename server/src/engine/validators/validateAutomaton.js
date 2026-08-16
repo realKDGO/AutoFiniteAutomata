@@ -2,7 +2,7 @@ import { findDeadStates } from '../utils/findDeadStates.js';
 
 export function toNfa(automaton) {
   const deadStates = new Set(findDeadStates(automaton));
-  const nfaStates = automaton.states.filter(s => !deadStates.has(s));
+  const nfaStates = automaton.states.filter(s => !deadStates.has(s) || s === automaton.startState);
 
   const nfaTransitions = {};
   for (const state of nfaStates) {

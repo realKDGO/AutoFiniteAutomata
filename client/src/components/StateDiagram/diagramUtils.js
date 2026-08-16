@@ -372,7 +372,7 @@ function boundaryPoint(from, to) {
  * Choose the loop side that is least crowded by adjacent edges.
  * Preference order when scores tie: top > right > bottom > left.
  */
-function loopSide(edge, positions, edges) {
+export function loopSide(edge, positions, edges) {
   const point = positions[edge.from];
   const score = { top: 0, right: 0, bottom: 0, left: 0 };
   const incident = edges.filter(

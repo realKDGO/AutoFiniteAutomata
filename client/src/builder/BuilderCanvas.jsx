@@ -6,9 +6,10 @@ import StateNode from '../components/StateDiagram/StateNode';
 import TransitionEdge from '../components/StateDiagram/TransitionEdge';
 import MobileFullscreenSidebar from './MobileFullscreenSidebar';
 import StateMovementController from './StateMovementController';
+import TransitionBendController from './TransitionBendController';
 import TransitionConnectorController from './TransitionConnectorController';
 import { getConnectorUsage, getNearestSnap, getStateConnectors, getVisibleConnectorStateId } from './connectorSnap';
-import { computeSelfLoopGeometry, computeTransitionGeometry } from './transitionGeometry';
+import { bendOffsetFromPoint, computeSelfLoopGeometry, computeTransitionGeometry, transitionMidpoint } from './transitionGeometry';
 
 const MOBILE_QUERY = '(max-width: 1023px)';
 const NODE_RADIUS = 32;
@@ -28,7 +29,7 @@ function nearestConnectorId(state, point) {
 function BuilderCanvas({
   automaton, stateById, groupedEdges, activeTool, activePanel, selectedStateId, selectedTransitionKey,
   onSelectState, onSelectTransition, onMoveState, onStartTransition, onEditTransition, onReconnectTransition,
-  simulation, onSetActiveTool, onAddStateAt, onOpenMobileSheet, onFullscreenChange,
+  onSetTransitionBend, simulation, onSetActiveTool, onAddStateAt, onOpenMobileSheet, onFullscreenChange,
   fullscreenContainerRef, onUndo, onRedo, canUndo, canRedo, onRequestClear, resetVersion,
 }) {
   const [zoom, setZoom] = useState(1);
@@ -37,6 +38,8 @@ function BuilderCanvas({
   const [movementControllerStateId, setMovementControllerStateId] = useState(null);
   const [transitionDraft, setTransitionDraft] = useState(null);
   const [desktopTransitionDrag, setDesktopTransitionDrag] = useState(null);
+  const [bendDragEdgeKey, setBendDragEdgeKey] = useState(null);
+  const [bendControllerEdgeKey, setBendControllerEdgeKey] = useState(null);
   const [toast, setToast] = useState('');
   const [, setViewportVersion] = useState(0);
   const wrapperRef = useRef(null);
@@ -45,6 +48,9 @@ function BuilderCanvas({
   const holdFiredRef = useRef(false);
   const desktopDragRef = useRef(null);
   const desktopTransitionDragRef = useRef(null);
+  const desktopBendDragRef = useRef(null);
+  const transitionHoldTimerRef = useRef(null);
+  const transitionHoldFiredRef = useRef(false);
 
   // ── Simulation integration ────────────────────────────────────────────────
   const session = simulation?.session;
@@ -140,6 +146,7 @@ function BuilderCanvas({
   }, [isFullscreen]);
   useEffect(() => { if (fullscreenContainerRef) fullscreenContainerRef.current = wrapperRef.current; }, [fullscreenContainerRef]);
   useEffect(() => () => clearTimeout(holdTimerRef.current), []);
+  useEffect(() => () => clearTimeout(transitionHoldTimerRef.current), []);
   useEffect(() => {
     const recalculate = () => setViewportVersion(version => version + 1);
     window.addEventListener('resize', recalculate);
@@ -152,7 +159,39 @@ function BuilderCanvas({
   useEffect(() => {
     setTransitionDraft(null);
     setMovementControllerStateId(null);
+    // Canvas reset — cancel any in-flight bend drag/controller so it never
+    // points at geometry that's about to disappear.
+    clearTimeout(transitionHoldTimerRef.current);
+    desktopBendDragRef.current = null;
+    setBendDragEdgeKey(null);
+    setBendControllerEdgeKey(null);
   }, [resetVersion]);
+  // Simulation starting mid-bend must not leave a dangling drag/controller
+  // pointed at geometry the simulator is about to animate over.
+  useEffect(() => {
+    if (!simulationActive) return;
+    clearTimeout(transitionHoldTimerRef.current);
+    desktopBendDragRef.current = null;
+    setBendDragEdgeKey(null);
+    setBendControllerEdgeKey(null);
+  }, [simulationActive]);
+  // Exiting Fullscreen closes the mobile bend controller — it's only ever
+  // meant to live inside Fullscreen mode.
+  useEffect(() => {
+    if (!isFullscreen) setBendControllerEdgeKey(null);
+  }, [isFullscreen]);
+  // If the transition currently being bent (drag or controller) is deleted
+  // out from under the interaction, cancel it instead of operating on a
+  // transition id that no longer exists.
+  useEffect(() => {
+    if (bendControllerEdgeKey && !groupedEdges.some(e => e.key === bendControllerEdgeKey)) {
+      setBendControllerEdgeKey(null);
+    }
+    if (desktopBendDragRef.current && !groupedEdges.some(e => e.key === desktopBendDragRef.current.edgeKey)) {
+      desktopBendDragRef.current = null;
+      setBendDragEdgeKey(null);
+    }
+  }, [groupedEdges]);
 
   const toggleFullscreen = useCallback(async () => {
     const element = wrapperRef.current;
@@ -256,6 +295,46 @@ function BuilderCanvas({
     try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* optional */ }
   }, []);
 
+  // ── Manual transition bending (desktop drag) ──────────────────────────────
+  // The bend handle/body is NOT a connector: it never touches from/to/
+  // sourceConnectorId/targetConnectorId, only the transition's stored
+  // { dx, dy } bend offset. Source and destination connectors stay fixed.
+  const beginDesktopBendDrag = useCallback((event, edge) => {
+    const transitionId = edge.transitionIds?.[0];
+    if (!transitionId) return;
+    desktopBendDragRef.current = {
+      transitionId,
+      edgeKey: edge.key,
+      fromId: edge.from,
+      toId: edge.to,
+      sourceConnectorId: edge.sourceConnectorId,
+      targetConnectorId: edge.targetConnectorId,
+    };
+    setBendDragEdgeKey(edge.key);
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* optional */ }
+  }, []);
+
+  const startBendInteraction = useCallback((event, edge) => {
+    if (simulationActive) return;
+    if (edge.from === edge.to) return; // self-loops keep their fixed geometry — no manual bend
+    event.stopPropagation();
+    if (isMobile) {
+      if (!editingAllowed) { showToast('This feature is only available in Fullscreen mode.'); return; }
+      transitionHoldFiredRef.current = false;
+      clearTimeout(transitionHoldTimerRef.current);
+      transitionHoldTimerRef.current = window.setTimeout(() => {
+        transitionHoldFiredRef.current = true;
+        setBendControllerEdgeKey(edge.key);
+      }, HOLD_DURATION_MS);
+    } else {
+      beginDesktopBendDrag(event, edge);
+    }
+  }, [beginDesktopBendDrag, editingAllowed, isMobile, showToast, simulationActive]);
+
+  const endBendInteraction = useCallback(() => {
+    clearTimeout(transitionHoldTimerRef.current);
+  }, []);
+
   const finishDesktopTransition = useCallback(() => {
     const drag = desktopTransitionDragRef.current;
     if (!drag) return false;
@@ -328,6 +407,22 @@ function BuilderCanvas({
   }, [activeTool, finishDesktopTransition, isMobile, onSelectState, simulationActive]);
 
   const handleCanvasPointerMove = useCallback(event => {
+    const bendDrag = desktopBendDragRef.current;
+    if (bendDrag) {
+      if (simulationActive) { desktopBendDragRef.current = null; setBendDragEdgeKey(null); return; }
+      const point = getSvgCoordinates(event);
+      const source = stateById[bendDrag.fromId];
+      const target = stateById[bendDrag.toId];
+      if (!source || !target) return;
+      const from = getStateConnectors(source).find(connector => connector.id === bendDrag.sourceConnectorId);
+      const to = getStateConnectors(target).find(connector => connector.id === bendDrag.targetConnectorId);
+      if (!from || !to) return;
+      // The handle follows the pointer directly — free positioning — and
+      // what's actually stored is the offset from the transition's own
+      // current midpoint, so it stays meaningful if the states later move.
+      onSetTransitionBend?.(bendDrag.transitionId, bendOffsetFromPoint(from, to, point));
+      return;
+    }
     const transitionDrag = desktopTransitionDragRef.current;
     if (transitionDrag) {
       const point = getSvgCoordinates(event);
@@ -350,9 +445,14 @@ function BuilderCanvas({
     if (Math.hypot(point.x - drag.start.x, point.y - drag.start.y) > 3) drag.moved = true;
     if (!drag.moved) return;
     onMoveState(drag.stateId, Math.max(20, Math.min(maxX, point.x - drag.offset.x)), Math.max(20, Math.min(maxY, point.y - drag.offset.y)));
-  }, [automaton.states, connectorAvailable, getSvgCoordinates, maxX, maxY, onMoveState, simulationActive, stateById]);
+  }, [automaton.states, connectorAvailable, getSvgCoordinates, maxX, maxY, onMoveState, onSetTransitionBend, simulationActive, stateById]);
 
   const handleCanvasPointerUp = useCallback(() => {
+    if (desktopBendDragRef.current) {
+      desktopBendDragRef.current = null;
+      setBendDragEdgeKey(null);
+      return;
+    }
     if (finishDesktopTransition()) return;
     desktopDragRef.current = null;
   }, [finishDesktopTransition]);
@@ -371,17 +471,34 @@ function BuilderCanvas({
     setDesktopTransitionDrag(null);
     desktopTransitionDragRef.current = null;
     setMovementControllerStateId(null);
+    clearTimeout(transitionHoldTimerRef.current);
+    desktopBendDragRef.current = null;
+    setBendDragEdgeKey(null);
+    setBendControllerEdgeKey(null);
     onSetActiveTool?.(tool);
   }, [blockMobileEditing, onSetActiveTool, showToast, simulationActive]);
 
   const openMobilePanel = useCallback(panel => {
     setTransitionDraft(null);
     setMovementControllerStateId(null);
+    clearTimeout(transitionHoldTimerRef.current);
+    desktopBendDragRef.current = null;
+    setBendDragEdgeKey(null);
+    setBendControllerEdgeKey(null);
     onOpenMobileSheet?.(panel);
   }, [onOpenMobileSheet]);
 
   const guardedUndo = useCallback(() => { if (!blockMobileEditing() && !blockSimulationEditing()) onUndo?.(); }, [blockMobileEditing, blockSimulationEditing, onUndo]);
   const guardedRedo = useCallback(() => { if (!blockMobileEditing() && !blockSimulationEditing()) onRedo?.(); }, [blockMobileEditing, blockSimulationEditing, onRedo]);
+  const guardedRequestClear = useCallback(() => {
+    // Clearing the canvas changes the automaton out from under a running
+    // simulation (dangling activeTransitionId, stale currentStateId, an
+    // in-flight animateMotion pointing at a path that no longer exists).
+    // Require the simulation to be reset first, same as every other
+    // canvas-editing action.
+    if (blockSimulationEditing()) return;
+    onRequestClear?.();
+  }, [blockSimulationEditing, onRequestClear]);
 
   // ── Derived geometry ──────────────────────────────────────────────────────
 
@@ -392,9 +509,25 @@ function BuilderCanvas({
     const targetConnector = getStateConnectors(target).find(point => point.id === edge.targetConnectorId);
     const geometry = edge.from === edge.to
       ? computeSelfLoopGeometry(source.position, edge.sourceConnectorId, edge.targetConnectorId)
-      : computeTransitionGeometry(source.position, target.position, targetConnector, sourceConnector, groupedEdges.some(other => other.from === edge.to && other.to === edge.from));
+      : computeTransitionGeometry(source.position, target.position, targetConnector, sourceConnector, groupedEdges.some(other => other.from === edge.to && other.to === edge.from), edge.bend);
     return { edge, geometry };
   }), [groupedEdges, stateById]);
+
+  // Nudge a transition's manual bend by a screen-space (dx, dy) delta — used
+  // by the mobile TransitionBendController. If the transition has no manual
+  // bend yet, start from wherever its current (automatic) curve control
+  // point already sits, so the very first tap continues smoothly from what's
+  // on screen instead of jumping the curve back to the straight midpoint.
+  const bendTransition = useCallback((edgeKey, deltaDx, deltaDy) => {
+    const route = routes.find(r => r.edge.key === edgeKey);
+    if (!route) return;
+    const { edge, geometry } = route;
+    const transitionId = edge.transitionIds?.[0];
+    if (!transitionId) return;
+    const mid = transitionMidpoint(geometry.start, geometry.end);
+    const base = edge.bend ?? { dx: geometry.control.x - mid.x, dy: geometry.control.y - mid.y };
+    onSetTransitionBend?.(transitionId, { dx: base.dx + deltaDx, dy: base.dy + deltaDy });
+  }, [onSetTransitionBend, routes]);
 
   const preview = useMemo(() => {
     if (transitionDraft?.sourceConnectorId == null || !transitionDraft.targetId) return null;
@@ -446,11 +579,11 @@ function BuilderCanvas({
 
   return (
     <div className="flex flex-col gap-3">
-      {!isFullscreen && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-display text-lg font-semibold">Interactive Canvas</h2><p className="text-xs text-ink-muted dark:text-ink-darkMuted">{activeTool === 'transition' ? (transitionDraft?.sourceId ? 'Select a destination state.' : 'Select a source state.') : 'Click a state to select it.'}</p></div><div className="flex items-center gap-1"><DiagramControls zoom={zoom} onZoom={setZoom} onReset={() => setZoom(1)} isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} onUndo={guardedUndo} onRedo={guardedRedo} canUndo={canUndo} canRedo={canRedo} /><button type="button" onClick={onRequestClear} aria-label="Reset canvas" title="Reset canvas" className="focus-ring rounded-lg border border-line bg-surface p-2 text-danger hover:bg-danger-soft dark:border-line-dark dark:bg-surface-dark"><Trash2 size={16} /></button></div></div>}
+      {!isFullscreen && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-display text-lg font-semibold">Interactive Canvas</h2><p className="text-xs text-ink-muted dark:text-ink-darkMuted">{activeTool === 'transition' ? (transitionDraft?.sourceId ? 'Select a destination state.' : 'Select a source state.') : 'Click a state to select it.'}</p></div><div className="flex items-center gap-1"><DiagramControls zoom={zoom} onZoom={setZoom} onReset={() => setZoom(1)} isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} onUndo={guardedUndo} onRedo={guardedRedo} canUndo={canUndo} canRedo={canRedo} /><button type="button" onClick={guardedRequestClear} aria-label="Reset canvas" title="Reset canvas" className="focus-ring rounded-lg border border-line bg-surface p-2 text-danger hover:bg-danger-soft dark:border-line-dark dark:bg-surface-dark"><Trash2 size={16} /></button></div></div>}
       <div ref={wrapperRef} className={isFullscreen ? 'fixed inset-0 z-40 flex overflow-hidden bg-surface-muted dark:bg-canvas-dark select-none' : 'relative min-h-[60vh] overflow-auto rounded-xl border border-line bg-surface-muted p-3 dark:border-line-dark dark:bg-canvas-dark select-none'}>
-        {isFullscreen && isMobile && <MobileFullscreenSidebar activeTool={activeTool} activePanel={activePanel} onSelectTool={guardedTool} onAddState={() => guardedTool('move')} onOpenTable={() => openMobilePanel('table')} onOpenSimulator={() => openMobilePanel('simulator')} />}
+        {isFullscreen && isMobile && <MobileFullscreenSidebar activeTool={activeTool} activePanel={activePanel} onSelectTool={guardedTool} onAddState={() => guardedTool('move')} onOpenTable={() => openMobilePanel('table')} onOpenSimulator={() => openMobilePanel('simulator')} onOpenSaveLoad={() => openMobilePanel('savedAutomata')} onOpenImportExport={() => openMobilePanel('importExport')} onOpenHistory={() => openMobilePanel('simulationHistory')} />}
         <div className={isFullscreen ? 'flex min-w-0 flex-1 flex-col overflow-auto p-3' : 'contents'}>
-          {isFullscreen && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2 dark:border-line-dark"><span className="text-xs font-semibold text-ink-muted dark:text-ink-darkMuted">Interactive Canvas — Fullscreen</span><div className="flex rounded-lg border border-line bg-surface p-1 dark:border-line-dark dark:bg-surface-dark">{['DFA','NFA'].map(type => <button key={type} type="button" onClick={() => !simulationActive && automaton.setType?.(type)} className={`focus-ring rounded-md px-2.5 py-1 text-xs font-bold transition ${automaton.type === type ? 'bg-primary text-white shadow-sm' : 'text-ink-muted hover:bg-primary-soft hover:text-primary dark:text-ink-darkMuted dark:hover:bg-primary/15 dark:hover:text-sky-300'}`}>{type}</button>)}</div><div className="flex items-center gap-1"><DiagramControls zoom={zoom} onZoom={setZoom} onReset={() => setZoom(1)} isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} onUndo={guardedUndo} onRedo={guardedRedo} canUndo={canUndo} canRedo={canRedo} /><button type="button" onClick={onRequestClear} aria-label="Reset canvas" title="Reset canvas" className="focus-ring rounded-lg border border-line bg-surface p-2 text-danger hover:bg-danger-soft dark:border-line-dark dark:bg-surface-dark"><Trash2 size={16} /></button></div></div>}
+          {isFullscreen && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2 dark:border-line-dark"><span className="text-xs font-semibold text-ink-muted dark:text-ink-darkMuted">Interactive Canvas — Fullscreen</span><div className="flex rounded-lg border border-line bg-surface p-1 dark:border-line-dark dark:bg-surface-dark">{['DFA','NFA'].map(type => <button key={type} type="button" onClick={() => !simulationActive && automaton.setType?.(type)} className={`focus-ring rounded-md px-2.5 py-1 text-xs font-bold transition ${automaton.type === type ? 'bg-primary text-white shadow-sm' : 'text-ink-muted hover:bg-primary-soft hover:text-primary dark:text-ink-darkMuted dark:hover:bg-primary/15 dark:hover:text-sky-300'}`}>{type}</button>)}</div><div className="flex items-center gap-1"><DiagramControls zoom={zoom} onZoom={setZoom} onReset={() => setZoom(1)} isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} onUndo={guardedUndo} onRedo={guardedRedo} canUndo={canUndo} canRedo={canRedo} /><button type="button" onClick={guardedRequestClear} aria-label="Reset canvas" title="Reset canvas" className="focus-ring rounded-lg border border-line bg-surface p-2 text-danger hover:bg-danger-soft dark:border-line-dark dark:bg-surface-dark"><Trash2 size={16} /></button></div></div>}
           <svg
             ref={svgRef}
             role="img"
@@ -491,11 +624,17 @@ function BuilderCanvas({
             {initial && <path d={`M ${initial.position.x - 60} ${initial.position.y} L ${initial.position.x - NODE_RADIUS - 4} ${initial.position.y}`} fill="none" stroke="currentColor" strokeWidth="2" markerEnd="url(#autofa-arrowhead)" className="text-ink-muted" />}
 
             {/* Transition edges — highlight active sim transition */}
-            {routes.map(({ edge, geometry }) => (
+            {routes.map(({ edge, geometry }) => {
+              const isLoop = edge.from === edge.to;
+              const bendable = !isLoop && !isSimulationSessionActive && selectedTransitionKey === edge.key;
+              return (
               <g
                 key={edge.key}
                 className="cursor-pointer"
                 onClick={event => { event.stopPropagation(); onSelectTransition(edge); }}
+                onPointerDown={event => { if (bendable) startBendInteraction(event, edge); }}
+                onPointerUp={endBendInteraction}
+                onPointerCancel={endBendInteraction}
               >
                 <TransitionEdge
                   edge={edge}
@@ -521,6 +660,24 @@ function BuilderCanvas({
                     className="cursor-grab pointer-events-none"
                   />
                 )}
+                {/* Midpoint bend handle — NOT a connector; only ever changes
+                    curvature. Hidden by default, shown only while this
+                    transition is selected/being edited, and never during a
+                    simulation session. */}
+                {bendable && (
+                  <circle
+                    cx={geometry.control.x}
+                    cy={geometry.control.y}
+                    r={isMobile ? 9 : 7}
+                    fill={bendDragEdgeKey === edge.key ? '#1683d8' : '#fff'}
+                    stroke="#1683d8"
+                    strokeWidth="2.5"
+                    className={isMobile ? 'cursor-pointer' : 'cursor-grab'}
+                    onPointerDown={event => startBendInteraction(event, edge)}
+                    onPointerUp={endBendInteraction}
+                    onPointerCancel={endBendInteraction}
+                  />
+                )}
                 {/* Edit pill — hidden during simulation sessions */}
                 {!isSimulationSessionActive && selectedTransitionKey === edge.key && (
                   <g onClick={event => { event.stopPropagation(); if (blockMobileEditing()) return; if (blockSimulationEditing()) return; onEditTransition?.(edge); }}>
@@ -529,7 +686,8 @@ function BuilderCanvas({
                   </g>
                 )}
               </g>
-            ))}
+              );
+            })}
 
             {/* Connector dots (desktop drag only) */}
             {[...visibleDesktopConnectorStates].map(stateId => {
@@ -622,6 +780,19 @@ function BuilderCanvas({
             onClose={() => setMovementControllerStateId(null)}
           />
         )}
+        {isMobile && isFullscreen && bendControllerEdgeKey && (() => {
+          const edge = groupedEdges.find(e => e.key === bendControllerEdgeKey);
+          if (!edge) return null;
+          const fromName = stateById[edge.from]?.name ?? '?';
+          const toName = stateById[edge.to]?.name ?? '?';
+          return (
+            <TransitionBendController
+              transitionLabel={`${fromName} → ${toName}`}
+              onBend={(dx, dy) => bendTransition(bendControllerEdgeKey, dx, dy)}
+              onClose={() => setBendControllerEdgeKey(null)}
+            />
+          );
+        })()}
         {toast && <div role="status" className="fixed bottom-5 left-1/2 z-[90] -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow-lift dark:bg-white dark:text-ink">{toast}</div>}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Trash2,
@@ -7,6 +8,9 @@ import {
   MousePointer,
   ArrowUpRight,
   ShieldAlert,
+  Save,
+  Download,
+  History,
 } from 'lucide-react';
 import PageContainer from '../components/PageContainer';
 import Card from '../components/ui/Card';
@@ -17,13 +21,30 @@ import MobileSheet from '../components/ui/MobileSheet';
 import FullscreenPortal from '../components/ui/FullscreenPortal';
 import { useAutomaton } from '../builder/useAutomaton';
 import { useBuilderSimulation } from '../builder/useBuilderSimulation';
+import { useSavedAutomata } from '../builder/useSavedAutomata';
+import {
+  serializeForCompare,
+  buildAutomatonExport,
+  sanitizeAutomatonImport,
+  sanitizeBuilderAutomaton,
+  buildExportFilename,
+} from '../builder/automatonStorage';
+import { exportAutomatonAsPng } from '../builder/imageExporter';
 import { validateAutomaton } from '../builder/builderValidator';
 import BuilderCanvas from '../builder/BuilderCanvas';
+import BuilderErrorBoundary from '../builder/BuilderErrorBoundary';
 import BuilderTable from '../builder/BuilderTable';
 import BuilderSimulator from '../builder/BuilderSimulator';
 import TransitionModal from '../builder/TransitionModal';
+import SavedAutomataPanel from '../builder/SavedAutomataPanel';
+import ImportExportPanel from '../builder/ImportExportPanel';
+import SimulationHistoryPanel from '../builder/SimulationHistoryPanel';
+import { useSimulationHistory } from '../builder/useSimulationHistory';
 
 export default function BuilderPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const {
     automaton,
     stateById,
@@ -43,16 +64,45 @@ export default function BuilderPage() {
     addTransition,
     updateTransition,
     removeTransition,
+    setTransitionBend,
     clearAll,
+    loadAutomatonIntoBuilder,
     undo,
     redo,
     canUndo,
     canRedo,
+    persistenceAvailable,
   } = useAutomaton();
 
   // ── Simulation hook ────────────────────────────────────────────────────────
   const simulation = useBuilderSimulation(automaton);
   const { simulationActive } = simulation;
+
+  // ── Simulation History (V2.3.5) ─────────────────────────────────────────────
+  const { history: simHistory, addRecord: addHistoryRecord, clearHistory } = useSimulationHistory();
+  // Guard ref: track the last session id that was recorded so a re-render
+  // or strict-mode double-effect never creates a duplicate entry.
+  const lastRecordedSessionIdRef = useRef(null);
+
+  // ── Saved Automata (V2.3.2) ─────────────────────────────────────────────────
+  const savedAutomata = useSavedAutomata();
+  // Identity of the saved entry the current canvas was last explicitly
+  // loaded from or saved as — used to prefill the Save name field and to
+  // detect unsaved changes. `null` means "current work has never been
+  // explicitly saved this session".
+  const [loadedMeta, setLoadedMeta] = useState(null); // { id, name } | null
+  const savedSnapshotRef = useRef(null); // string | null — serialized automaton as of last explicit save/load
+  const [loadConfirm, setLoadConfirm] = useState(null); // { id, name } | null
+
+  // ── JSON Import / Export (V2.3.3) ───────────────────────────────────────────
+  // A validated-but-not-yet-applied import, awaiting the user's confirmation
+  // to replace current work — same pattern as loadConfirm above.
+  const [importConfirm, setImportConfirm] = useState(null); // { automaton } | null
+
+  // ── Generator → Builder handoff (V2.3.4.1) ──────────────────────────────────
+  // Same "awaiting confirmation" pattern as importConfirm above.
+  const [generatorConfirm, setGeneratorConfirm] = useState(null); // { automaton } | null
+  const handledGeneratorTransferRef = useRef(false);
 
   // Active Tool state
   const [activeTool, setActiveTool] = useState('select'); // 'select' | 'move' | 'transition'
@@ -86,10 +136,66 @@ export default function BuilderPage() {
     return () => query.removeEventListener('change', change);
   }, []);
 
+  // Save/Load and Import/Export are Fullscreen-only on mobile — auto-close
+  // whichever is open if the user exits Fullscreen, so neither lingers
+  // outside the canvas.
+  useEffect(() => {
+    if (!isCanvasFullscreen && isMobileViewport) {
+      setActivePanel(current =>
+        current === 'savedAutomata' || current === 'importExport' || current === 'simulationHistory' ? null : current
+      );
+    }
+  }, [isCanvasFullscreen, isMobileViewport]);
+
   const showToast = message => {
     setToast(message);
     window.setTimeout(() => setToast(current => current === message ? '' : current), 2600);
   };
+
+  // Non-blocking notice if LocalStorage persistence isn't available (quota
+  // exceeded, private browsing, etc.) — editing continues normally either way.
+  const hasWarnedPersistenceRef = useRef(false);
+  useEffect(() => {
+    if (!persistenceAvailable && !hasWarnedPersistenceRef.current) {
+      hasWarnedPersistenceRef.current = true;
+      showToast('Local autosave is unavailable — changes won\u2019t persist after you leave.');
+    }
+  }, [persistenceAvailable]);
+
+  // ── Auto-record completed simulations (V2.3.5) ──────────────────────────────
+  // Fires only when the session reaches a terminal status (ACCEPTED/REJECTED).
+  // The lastRecordedSessionIdRef guard prevents double-recording on re-renders.
+  // A unique session key is derived from the timestamp + input so the same
+  // session is never recorded twice even under React strict-mode double-effects.
+  useEffect(() => {
+    const { status, sessionPath, input, result, finalStateId, timestamp } = simulation.session;
+    if (status !== 'ACCEPTED' && status !== 'REJECTED') return;
+
+    // Build a stable per-session key from the terminal timestamp.
+    // finish() sets status+result atomically, so the timestamp only exists
+    // once the session is truly done. Fall back to input+result as a tiebreak.
+    const sessionKey = timestamp ?? `${input}:${result}`;
+    if (lastRecordedSessionIdRef.current === sessionKey) return;
+    lastRecordedSessionIdRef.current = sessionKey;
+
+    // Resolve state names from stateById.
+    const initialState = automaton.states.find(s => s.initial);
+    const startingStateName = initialState?.name ?? null;
+    const finalStateObj = finalStateId ? stateById[finalStateId] : null;
+    const finalStateName = finalStateObj?.name ?? null;
+
+    addHistoryRecord({
+      input,
+      result,
+      type:          automaton.type,
+      startingState: startingStateName,
+      finalState:    finalStateName,
+      path:          sessionPath ?? [],
+      automatonName: loadedMeta?.name ?? null,
+      timestamp:     new Date().toISOString(),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simulation.session.status, simulation.session.timestamp]);
 
   const handleAddStateAt = coords => {
     addState({ position: coords });
@@ -125,11 +231,17 @@ export default function BuilderPage() {
   };
 
   const togglePanel = panel => {
-    if ((panel === 'table' || panel === 'simulator') && isMobileViewport && !isCanvasFullscreen) {
+    if ((panel === 'table' || panel === 'simulator' || panel === 'savedAutomata' || panel === 'importExport' || panel === 'simulationHistory') && isMobileViewport && !isCanvasFullscreen) {
       showToast(
         panel === 'table'
           ? 'Table is only available in Fullscreen mode.'
-          : 'Simulation is only available in Fullscreen mode.'
+          : panel === 'simulator'
+            ? 'Simulation is only available in Fullscreen mode.'
+            : panel === 'savedAutomata'
+              ? 'Save / Load is only available in Fullscreen mode.'
+              : panel === 'simulationHistory'
+                ? 'Simulation History is only available in Fullscreen mode.'
+                : 'Import / Export is only available in Fullscreen mode.'
       );
       return;
     }
@@ -250,6 +362,165 @@ export default function BuilderPage() {
       }
     }
   };
+
+  // A canvas with no states has nothing worth warning about losing.
+  const hasUnsavedChanges =
+    automaton.states.length > 0 &&
+    serializeForCompare(automaton) !== savedSnapshotRef.current;
+
+  const performLoad = id => {
+    const result = savedAutomata.loadById(id);
+    if (!result.ok) {
+      showToast('Unable to load this automaton. The saved data is invalid or incompatible.');
+      return;
+    }
+    simulation.reset();
+    loadAutomatonIntoBuilder(result.automaton);
+    savedSnapshotRef.current = serializeForCompare(result.automaton);
+    setLoadedMeta({ id: result.id, name: result.name });
+    setSelectedStateId(null);
+    setSelectedTransitionKey(null);
+    setActivePanel(null);
+    setCanvasResetVersion(version => version + 1);
+    showToast(`Loaded "${result.name}".`);
+  };
+
+  const handleRequestLoad = (id, name) => {
+    if (hasUnsavedChanges) {
+      setActivePanel(null);
+      setLoadConfirm({ id, name });
+      return;
+    }
+    performLoad(id);
+  };
+
+  const handleSavedPanelSave = (name, opts) => {
+    const result = savedAutomata.save(name, automaton, opts);
+    if (result.ok) {
+      savedSnapshotRef.current = serializeForCompare(automaton);
+      setLoadedMeta({ id: result.id, name: name.trim() });
+      showToast(opts?.overwriteId ? `Updated "${name.trim()}".` : `Saved "${name.trim()}".`);
+    }
+    return result;
+  };
+
+  const handleDeleteSaved = id => {
+    const ok = savedAutomata.remove(id);
+    if (!ok) showToast('Could not delete — please try again.');
+    return ok;
+  };
+
+  // ── JSON Import / Export (V2.3.3) ───────────────────────────────────────────
+
+  const handleExport = () => {
+    if (!automaton.states || automaton.states.length === 0) return;
+    const payload = buildAutomatonExport(automaton);
+    const filename = buildExportFilename(loadedMeta?.name);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Applies an already-validated imported automaton — mirrors performLoad,
+  // but an import isn't tied to any saved slot, so loadedMeta is cleared
+  // rather than pointed at one. Reused by the Generator handoff below with
+  // a different confirmation message.
+  const applyImport = (importedAutomaton, message = 'Automaton imported.') => {
+    simulation.reset();
+    loadAutomatonIntoBuilder(importedAutomaton);
+    savedSnapshotRef.current = null;
+    setLoadedMeta(null);
+    setSelectedStateId(null);
+    setSelectedTransitionKey(null);
+    setActivePanel(null);
+    setCanvasResetVersion(version => version + 1);
+    showToast(message);
+  };
+
+  // Reads, parses, and validates the selected file before ever touching the
+  // Builder or LocalStorage — a failed import leaves both untouched.
+  const handleImportFile = file => {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      showToast('Unable to import automaton. The selected JSON file is invalid or incompatible with AutoFA.');
+    };
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(String(reader.result));
+      } catch {
+        showToast('Unable to import automaton. The selected JSON file is invalid or incompatible with AutoFA.');
+        return;
+      }
+      const result = sanitizeAutomatonImport(parsed);
+      if (!result.ok) {
+        showToast(
+          result.error === 'unsupported-version'
+            ? 'This AutoFA file was created with a newer format and cannot be opened by this version.'
+            : 'Unable to import automaton. The selected JSON file is invalid or incompatible with AutoFA.'
+        );
+        return;
+      }
+      if (automaton.states.length > 0) {
+        setActivePanel(null);
+        setImportConfirm({ automaton: result.automaton });
+      } else {
+        applyImport(result.automaton);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // ── Image Export (V2.3.4) ───────────────────────────────────────────────────
+
+  const handleExportImage = async () => {
+    if (!automaton.states || automaton.states.length === 0) return;
+    const isDarkMode = document.documentElement.classList.contains('dark');
+    const result = await exportAutomatonAsPng({
+      automaton,
+      stateById,
+      groupedEdges,
+      loadedName: loadedMeta?.name,
+      isDarkMode,
+    });
+    if (!result.ok) {
+      showToast('Unable to export image. Please try again.');
+    }
+  };
+
+  // ── Generator → Builder handoff (V2.3.4.1) ──────────────────────────────────
+  // Reuses the same automaton contract as JSON Import/Save-Load — the
+  // Generator already converted its result into that shape (see
+  // createBuilderAutomatonFromGenerated in automatonStorage.js) before
+  // navigating here, so this only re-validates it defensively and decides
+  // whether it's safe to apply immediately.
+  useEffect(() => {
+    const transfer = location.state?.generatorTransfer;
+    if (!transfer || handledGeneratorTransferRef.current) return;
+    handledGeneratorTransferRef.current = true;
+
+    // Clear the router state immediately — a refresh, a Cancel, or simply
+    // navigating back to /builder later must never re-apply this handoff.
+    navigate(location.pathname, { replace: true, state: {} });
+
+    const validated = sanitizeBuilderAutomaton(transfer.automaton);
+    if (!validated) {
+      showToast('Unable to open this automaton in Builder. Please try generating it again.');
+      return;
+    }
+    if (automaton.states.length > 0) {
+      setGeneratorConfirm({ automaton: validated });
+    } else {
+      applyImport(validated, 'Automaton loaded from Generator.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   return (
     <PageContainer className="max-w-7xl space-y-6">
@@ -405,52 +676,102 @@ export default function BuilderPage() {
               >
                 <ArrowUpRight size={14} /> Create Transition
               </button>
+
+              <div className="h-6 w-px bg-line dark:bg-line-dark mx-1" />
+
+              <button
+                type="button"
+                onClick={() => togglePanel('savedAutomata')}
+                className={`focus-ring hidden items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold lg:inline-flex ${
+                  activePanel === 'savedAutomata'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'border border-line bg-surface hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark'
+                }`}
+              >
+                <Save size={14} /> Save / Load
+              </button>
+
+              <button
+                type="button"
+                onClick={() => togglePanel('importExport')}
+                className={`focus-ring hidden items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold lg:inline-flex ${
+                  activePanel === 'importExport'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'border border-line bg-surface hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark'
+                }`}
+              >
+                <Download size={14} /> Import / Export
+              </button>
+
+              <button
+                type="button"
+                onClick={() => togglePanel('simulationHistory')}
+                className={`focus-ring hidden items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold lg:inline-flex ${
+                  activePanel === 'simulationHistory'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'border border-line bg-surface hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark'
+                }`}
+              >
+                <History size={14} /> Sim History
+              </button>
             </div>
           </Card>
 
           {/* Visual Canvas */}
           <Card>
-            <BuilderCanvas
-              automaton={{ ...automaton, setType }}
-              stateById={stateById}
-              groupedEdges={groupedEdges}
-              activeTool={activeTool}
-              activePanel={activePanel}
-              selectedStateId={selectedStateId}
-              selectedTransitionKey={selectedTransitionKey}
-              simulation={simulation}
-              onSelectState={id => {
-                setSelectedStateId(id);
-                setSelectedTransitionKey(null);
-                if (id) {
-                  setEditStateName(stateById[id]?.name ?? '');
-                  setTransitionModalOpen(false);
-                  setActivePanel('editState');
-                } else if (activePanel === 'editState') {
-                  setActivePanel(null);
-                }
-              }}
-              onSelectTransition={edge => {
-                setSelectedTransitionKey(edge.key);
+            <BuilderErrorBoundary
+              onReset={() => {
+                setActivePanel(null);
+                setTransitionModalOpen(false);
                 setSelectedStateId(null);
-                setActivePanel(current => current === 'editState' ? null : current);
+                setSelectedTransitionKey(null);
+                setActiveTool('select');
+                setCanvasResetVersion(version => version + 1);
               }}
-              onMoveState={moveState}
-              onStartTransition={handleStartTransition}
-              onEditTransition={handleEditTransition}
-              onReconnectTransition={handleReconnectTransition}
-              onSetActiveTool={activateTool}
-              onAddStateAt={handleAddStateAt}
-              onOpenMobileSheet={togglePanel}
-              onFullscreenChange={setIsCanvasFullscreen}
-              fullscreenContainerRef={fullscreenContainerRef}
-              onUndo={undo}
-              onRedo={redo}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              onRequestClear={() => setClearModalOpen(true)}
-              resetVersion={canvasResetVersion}
-            />
+            >
+              <BuilderCanvas
+                automaton={{ ...automaton, setType }}
+                stateById={stateById}
+                groupedEdges={groupedEdges}
+                activeTool={activeTool}
+                activePanel={activePanel}
+                selectedStateId={selectedStateId}
+                selectedTransitionKey={selectedTransitionKey}
+                simulation={simulation}
+                onSelectState={id => {
+                  setSelectedStateId(id);
+                  setSelectedTransitionKey(null);
+                  if (id) {
+                    setEditStateName(stateById[id]?.name ?? '');
+                    setTransitionModalOpen(false);
+                    setActivePanel('editState');
+                  } else if (activePanel === 'editState') {
+                    setActivePanel(null);
+                  }
+                }}
+                onSelectTransition={edge => {
+                  setSelectedTransitionKey(edge.key);
+                  setSelectedStateId(null);
+                  setActivePanel(current => current === 'editState' ? null : current);
+                }}
+                onMoveState={moveState}
+                onStartTransition={handleStartTransition}
+                onEditTransition={handleEditTransition}
+                onReconnectTransition={handleReconnectTransition}
+                onSetTransitionBend={setTransitionBend}
+                onSetActiveTool={activateTool}
+                onAddStateAt={handleAddStateAt}
+                onOpenMobileSheet={togglePanel}
+                onFullscreenChange={setIsCanvasFullscreen}
+                fullscreenContainerRef={fullscreenContainerRef}
+                onUndo={undo}
+                onRedo={redo}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onRequestClear={() => setClearModalOpen(true)}
+                resetVersion={canvasResetVersion}
+              />
+            </BuilderErrorBoundary>
           </Card>
 
           {/* Synchronized Transition Table — always visible on desktop;
@@ -463,6 +784,7 @@ export default function BuilderPage() {
             <BuilderTable
               tableData={getTransitionTable()}
               onUpdateCell={handleUpdateTableCell}
+              simulationActive={simulationActive}
             />
           </Card>
 
@@ -703,10 +1025,110 @@ export default function BuilderPage() {
           <BuilderTable
             tableData={getTransitionTable()}
             onUpdateCell={handleUpdateTableCell}
+            simulationActive={simulationActive}
+          />
+        </MobileSheet>
+
+        <MobileSheet
+          open={activePanel === 'savedAutomata'}
+          title="Save / Load"
+          onClose={() => setActivePanel(null)}
+          side
+        >
+          <SavedAutomataPanel
+            entries={savedAutomata.entries}
+            currentAutomaton={automaton}
+            defaultName={loadedMeta?.name ?? ''}
+            onSave={handleSavedPanelSave}
+            onRequestLoad={handleRequestLoad}
+            onDelete={handleDeleteSaved}
+          />
+        </MobileSheet>
+
+        <MobileSheet
+          open={activePanel === 'importExport'}
+          title="Import / Export"
+          onClose={() => setActivePanel(null)}
+          side
+        >
+          <ImportExportPanel
+            currentAutomaton={automaton}
+            onExport={handleExport}
+            onExportImage={handleExportImage}
+            onImportFile={handleImportFile}
+          />
+        </MobileSheet>
+
+        <MobileSheet
+          open={activePanel === 'simulationHistory'}
+          title="Simulation History"
+          onClose={() => setActivePanel(null)}
+          side={isCanvasFullscreen}
+        >
+          <SimulationHistoryPanel
+            history={simHistory}
+            onClearHistory={clearHistory}
           />
         </MobileSheet>
       </div>
       </FullscreenPortal>
+
+      {/* Save/Load — desktop version. Mobile uses the right-to-left
+          MobileSheet above instead of this centered dialog. */}
+      <div className="hidden lg:block">
+        <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+          <Modal
+            open={activePanel === 'savedAutomata' && !isMobileViewport}
+            title="Save / Load Automata"
+            onClose={() => setActivePanel(null)}
+          >
+            <SavedAutomataPanel
+              entries={savedAutomata.entries}
+              currentAutomaton={automaton}
+              defaultName={loadedMeta?.name ?? ''}
+              onSave={handleSavedPanelSave}
+              onRequestLoad={handleRequestLoad}
+              onDelete={handleDeleteSaved}
+            />
+          </Modal>
+        </FullscreenPortal>
+      </div>
+
+      {/* Import/Export — desktop version. Mobile uses the right-to-left
+          MobileSheet above instead of this centered dialog. */}
+      <div className="hidden lg:block">
+        <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+          <Modal
+            open={activePanel === 'importExport' && !isMobileViewport}
+            title="Import / Export"
+            onClose={() => setActivePanel(null)}
+          >
+            <ImportExportPanel
+              currentAutomaton={automaton}
+              onExport={handleExport}
+              onExportImage={handleExportImage}
+              onImportFile={handleImportFile}
+            />
+          </Modal>
+        </FullscreenPortal>
+      </div>
+
+      {/* Simulation History — desktop version (modal). Mobile uses the
+          right-to-left MobileSheet in the lg:hidden block above. */}
+      <div className="hidden lg:block">
+        <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+          <Modal
+            open={activePanel === 'simulationHistory' && !isMobileViewport}
+            title="Simulation History"
+            onClose={() => setActivePanel(null)}
+          >
+            <SimulationHistoryPanel
+              history={simHistory}
+              onClearHistory={clearHistory}
+            />
+          </Modal>
+        </FullscreenPortal>
+      </div>
 
       {/* Transition Modal — also portaled into the fullscreen root while
           fullscreen is active. Unlike the panels above this one is used on
@@ -756,15 +1178,112 @@ export default function BuilderPage() {
               <Button
                 variant="danger"
                 onClick={() => {
+                  simulation.reset();
                   clearAll();
                   setSelectedStateId(null);
                   setSelectedTransitionKey(null);
                   setActivePanel(null);
                   setCanvasResetVersion(version => version + 1);
                   setClearModalOpen(false);
+                  setLoadedMeta(null);
                 }}
               >
                 Clear Canvas
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      </FullscreenPortal>
+
+      {/* Load Confirmation Modal — only shown when the current canvas has
+          unsaved changes; a clean/empty canvas loads immediately. */}
+      <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+        <Modal
+          open={Boolean(loadConfirm)}
+          title="Load this automaton?"
+          onClose={() => setLoadConfirm(null)}
+        >
+          <div className="space-y-4 text-sm">
+            <p className="text-ink-muted dark:text-ink-darkMuted">
+              Your current work will be replaced{loadConfirm ? ` with "${loadConfirm.name}"` : ''}.
+              It was auto-saved, but any unsaved changes won&rsquo;t be reachable unless you save them first.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setLoadConfirm(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const target = loadConfirm;
+                  setLoadConfirm(null);
+                  if (target) performLoad(target.id);
+                }}
+              >
+                Load
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      </FullscreenPortal>
+
+      {/* Import Confirmation Modal — only shown when the current canvas has
+          states; an empty canvas imports immediately. */}
+      <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+        <Modal
+          open={Boolean(importConfirm)}
+          title="Import this automaton?"
+          onClose={() => setImportConfirm(null)}
+        >
+          <div className="space-y-4 text-sm">
+            <p className="text-ink-muted dark:text-ink-darkMuted">
+              Your current Builder automaton will be replaced. It was auto-saved, but any unsaved changes won&rsquo;t be reachable unless you save them first.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setImportConfirm(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const target = importConfirm;
+                  setImportConfirm(null);
+                  if (target) applyImport(target.automaton);
+                }}
+              >
+                Import
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      </FullscreenPortal>
+
+      {/* Generator Handoff Confirmation Modal — only shown when the current
+          canvas has states; an empty canvas opens the generated automaton
+          immediately. */}
+      <FullscreenPortal active={isCanvasFullscreen} container={fullscreenContainerRef.current}>
+        <Modal
+          open={Boolean(generatorConfirm)}
+          title="Open generated automaton in Builder?"
+          onClose={() => setGeneratorConfirm(null)}
+        >
+          <div className="space-y-4 text-sm">
+            <p className="text-ink-muted dark:text-ink-darkMuted">
+              Your current Builder automaton will be replaced with the automaton you just generated. It was auto-saved, but any unsaved changes won&rsquo;t be reachable unless you save them first.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setGeneratorConfirm(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const target = generatorConfirm;
+                  setGeneratorConfirm(null);
+                  if (target) applyImport(target.automaton, 'Automaton loaded from Generator.');
+                }}
+              >
+                Open in Builder
               </Button>
             </div>
           </div>

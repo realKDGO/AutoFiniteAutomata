@@ -1,5 +1,11 @@
-import { useCallback, useReducer } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { getConnectorUsage } from './connectorSnap';
+import { isStorageAvailable, loadAutomaton, saveAutomaton } from './automatonStorage';
+
+// Movement (and similar rapid-fire) actions can dispatch many times a
+// second; debounce writes so we only touch LocalStorage once the automaton
+// settles instead of on every frame.
+const AUTOSAVE_DEBOUNCE_MS = 400;
 
 // ─── ID / Naming Helpers ─────────────────────────────────────────────────────
 
@@ -235,6 +241,21 @@ function automatonReducer(state, action) {
       return { ...state, transitions: state.transitions.filter(t => t.id !== id) };
     }
 
+    // Manual bend geometry is purely visual override data attached to the
+    // transition — it never creates fake states/connectors and never
+    // touches from/to/sourceConnectorId/targetConnectorId. `bend` is either
+    // null (use automatic routing) or { dx, dy }: an offset in SVG-space
+    // units applied to the transition's current start/end midpoint.
+    case 'SET_TRANSITION_BEND': {
+      const { id, bend } = action.payload;
+      const current = state.transitions.find(t => t.id === id);
+      if (!current) return state;
+      return {
+        ...state,
+        transitions: state.transitions.map(t => (t.id === id ? { ...t, bend } : t)),
+      };
+    }
+
     case 'CLEAR':
       return {
         ...initialAutomaton,
@@ -242,6 +263,13 @@ function automatonReducer(state, action) {
         alphabet: state.alphabet,
         stateNaming: state.stateNaming,
       };
+
+    // V2.3.2: replace the whole working automaton with a previously saved
+    // one. The payload is expected to already be a sanitized, well-formed
+    // automaton (see automatonStorage.getSavedAutomatonForLoad) — this
+    // reducer trusts its caller the same way CLEAR trusts initialAutomaton.
+    case 'LOAD_AUTOMATON':
+      return action.payload;
 
     default:
       return state;
@@ -262,21 +290,55 @@ function buildGroupedEdges(transitions) {
     transitionIds: [t.id],
     labels: t.symbols,
     label: t.symbols.join(', '),
+    bend: t.bend ?? null,
   }));
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
-export function useAutomaton() {
-  const [historyState, dispatch] = useReducer(reducer, {
+function initHistoryState() {
+  const restored = loadAutomaton();
+  return {
     past: [],
-    present: initialAutomaton,
+    present: restored ?? initialAutomaton,
     future: [],
-  });
+  };
+}
+
+export function useAutomaton() {
+  const [historyState, dispatch] = useReducer(reducer, undefined, initHistoryState);
 
   const automaton = historyState.present;
   const canUndo = historyState.past.length > 0;
   const canRedo = historyState.future.length > 0;
+
+  // ── Auto-save (V2.3.1) ───────────────────────────────────────────────────
+  // Persist only the committed `present` automaton — history (past/future)
+  // and any in-progress interaction state elsewhere in the app are never
+  // written. Debounced so rapid changes (e.g. holding a move button) collapse
+  // into a single write once things settle.
+  const [persistenceAvailable, setPersistenceAvailable] = useState(() => isStorageAvailable());
+  const saveTimeoutRef = useRef(null);
+  const isFirstRenderRef = useRef(true);
+
+  useEffect(() => {
+    // Skip the write on mount: we just restored (or intentionally started
+    // clean from) this exact state, so re-saving it is redundant.
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return undefined;
+    }
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      const ok = saveAutomaton(automaton);
+      setPersistenceAvailable(ok);
+    }, AUTOSAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [automaton]);
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
@@ -385,7 +447,15 @@ export function useAutomaton() {
     id => dispatch({ type: 'REMOVE_TRANSITION', payload: { id } }),
     []
   );
+  const setTransitionBend = useCallback(
+    (id, bend) => dispatch({ type: 'SET_TRANSITION_BEND', payload: { id, bend } }),
+    []
+  );
   const clearAll = useCallback(() => dispatch({ type: 'CLEAR' }), []);
+  const loadAutomatonIntoBuilder = useCallback(
+    loaded => dispatch({ type: 'LOAD_AUTOMATON', payload: loaded }),
+    []
+  );
 
   const undo = useCallback(() => dispatch({ type: 'UNDO' }), []);
   const redo = useCallback(() => dispatch({ type: 'REDO' }), []);
@@ -409,10 +479,13 @@ export function useAutomaton() {
     addTransition,
     updateTransition,
     removeTransition,
+    setTransitionBend,
     clearAll,
+    loadAutomatonIntoBuilder,
     undo,
     redo,
     canUndo,
     canRedo,
+    persistenceAvailable,
   };
 }

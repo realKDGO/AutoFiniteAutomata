@@ -39,6 +39,10 @@ export function useBuilderSimulation(automaton) {
   const [speed, setSpeed] = useState('normal');
   const timerRef   = useRef(null);
   const sessionRef = useRef(session);
+  // Accumulates state names visited during the current run.
+  // Reset on reset() and on re-initialisation. Captured into the
+  // session by finish() so BuilderPage can build a history record.
+  const pathRef = useRef([]);
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -54,11 +58,13 @@ export function useBuilderSimulation(automaton) {
 
   const reset = useCallback(() => {
     clearTimer();
+    pathRef.current = [];
     commit(idleSession(sessionRef.current.input));
   }, [clearTimer, commit]);
 
   const setInput = useCallback(input => {
     clearTimer();
+    pathRef.current = [];
     commit(idleSession(input));
   }, [clearTimer, commit]);
 
@@ -99,6 +105,13 @@ export function useBuilderSimulation(automaton) {
       result,
       error,
       finalStateId,
+      // Snapshot the path at the moment of completion so BuilderPage can
+      // build a history record. Sliced to avoid sharing the mutable ref.
+      sessionPath: pathRef.current.slice(),
+      // Stable timestamp used as a deduplication key by the auto-record
+      // useEffect in BuilderPage — ensures the same completed session is
+      // never recorded twice, even under React strict-mode double-effects.
+      timestamp: new Date().toISOString(),
     });
   }, [clearTimer, commit, automaton.states]);
 
@@ -125,6 +138,8 @@ export function useBuilderSimulation(automaton) {
         finish(current, 'REJECT', 'Cannot simulate: no initial state is designated.');
         return;
       }
+      // Reset path and seed with the initial state name.
+      pathRef.current = [initial.name ?? initial.id];
       base = {
         ...idleSession(current.input),
         currentStateId: initial.id,
@@ -201,6 +216,15 @@ export function useBuilderSimulation(automaton) {
       const latest = sessionRef.current;
       const nextStateIds = [...new Set(matchingTransitions.map(t => t.to))];
       const nextStates = automaton.states.filter(s => nextStateIds.includes(s.id));
+
+      // Record the destination state(s) into the path.
+      // For NFA, when multiple states are reached simultaneously, record
+      // all of them joined by '/' so the path remains a flat string array.
+      const nextStateNames = nextStates.map(s => s.name ?? s.id);
+      const pathEntry = nextStateNames.length === 1
+        ? nextStateNames[0]
+        : nextStateNames.join('/');
+      pathRef.current.push(pathEntry);
 
       const next = {
         ...latest,

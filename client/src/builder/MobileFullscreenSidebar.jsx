@@ -1,4 +1,4 @@
-import { MousePointer, Plus, ArrowUpRight, Table, Play } from 'lucide-react';
+import { MousePointer, Plus, ArrowUpRight, Table, Play, Save, Download, History } from 'lucide-react';
 
 /**
  * Mobile fullscreen control rail.
@@ -18,6 +18,9 @@ export default function MobileFullscreenSidebar({
   onAddState,
   onOpenTable,
   onOpenSimulator,
+  onOpenSaveLoad,
+  onOpenImportExport,
+  onOpenHistory,
   activePanel,
 }) {
   const tools = [
@@ -91,6 +94,39 @@ export default function MobileFullscreenSidebar({
       >
         <Play size={18} />
         Sim
+      </button>
+
+      <button
+        type="button"
+        onClick={() => onOpenSaveLoad?.()}
+        aria-label="Open Save / Load"
+        aria-pressed={activePanel === 'savedAutomata'}
+        className={`focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border py-2 text-[10px] font-semibold leading-tight ${activePanel === 'savedAutomata' ? 'border-primary bg-primary text-white shadow-sm' : 'border-line bg-surface text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'}`}
+      >
+        <Save size={18} />
+        Save
+      </button>
+
+      <button
+        type="button"
+        onClick={() => onOpenImportExport?.()}
+        aria-label="Open Import / Export"
+        aria-pressed={activePanel === 'importExport'}
+        className={`focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border py-2 text-[10px] font-semibold leading-tight ${activePanel === 'importExport' ? 'border-primary bg-primary text-white shadow-sm' : 'border-line bg-surface text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'}`}
+      >
+        <Download size={18} />
+        Import
+      </button>
+
+      <button
+        type="button"
+        onClick={() => onOpenHistory?.()}
+        aria-label="Open Simulation History"
+        aria-pressed={activePanel === 'simulationHistory'}
+        className={`focus-ring flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-xl border py-2 text-[10px] font-semibold leading-tight ${activePanel === 'simulationHistory' ? 'border-primary bg-primary text-white shadow-sm' : 'border-line bg-surface text-ink hover:bg-primary-soft dark:border-line-dark dark:bg-surface-dark dark:text-ink-dark'}`}
+      >
+        <History size={18} />
+        History
       </button>
 
     </div>
