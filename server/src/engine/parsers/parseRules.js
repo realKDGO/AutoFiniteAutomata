@@ -35,7 +35,9 @@ export function parseRules(conditions) {
       continue;
     }
     const rawCount = item.count ?? item.value;
-    const pos = item.position === undefined ? (item.type === 'secondToLastSymbol' ? 2 : undefined) : Number(item.position);
+    const pos = item.position === undefined || item.position === ''
+      ? (item.type === 'firstSymbol' ? 1 : item.type === 'secondToLastSymbol' ? 2 : undefined)
+      : Number(item.position);
     rules.push({
       kind: mapping[item.type],
       value: item.value,

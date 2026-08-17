@@ -2,6 +2,7 @@ import { Route, Routes } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
 import AboutPage from './pages/AboutPage';
 import BuilderPage from './pages/BuilderPage';
+import DownloadPage from './pages/DownloadPage';
 import GeneratePage from './pages/GeneratePage';
 import HomePage from './pages/HomePage';
 import NotFoundPage from './pages/NotFoundPage';
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/generate" element={<GeneratePage />} />
         <Route path="/result" element={<ResultPage />} />
         <Route path="/about" element={<AboutPage />} />
+        <Route path="/download" element={<DownloadPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Menu, Moon, Sun, X } from 'lucide-react';
 import logo from '../assets/logo.png';
+import InstallAppBanner from '../components/InstallAppBanner';
+import UpdateModal from '../components/UpdateModal';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 const links = [['/', 'Home'], ['/builder', 'Builder'], ['/generate', 'Generator'], ['/result', 'Results'], ['/about', 'About']];
 function Brand() { return <NavLink to="/" className="focus-ring mb-9 flex items-center gap-2 font-display text-xl font-bold text-ink dark:text-ink-dark"><img src={logo} alt="AutoFA" className="size-9 rounded-xl object-cover shadow-sm" />AutoFA</NavLink>; }
@@ -63,8 +65,21 @@ export default function AppLayout() {
           </div>
         </main>
 
-        <footer className="border-t border-line px-5 py-7 text-center text-sm text-ink-muted dark:border-line-dark dark:text-ink-darkMuted">© 2026 AutoFA · A learning tool for formal languages.</footer>
+        <footer className="border-t border-line px-5 py-7 text-center text-sm text-ink-muted dark:border-line-dark dark:text-ink-darkMuted">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+            <span>© 2026 AutoFA · A learning tool for formal languages.</span>
+            <span aria-hidden="true" className="hidden sm:inline opacity-40">·</span>
+            <NavLink
+              to="/download"
+              className="focus-ring font-medium text-primary hover:underline dark:text-sky-400"
+            >
+              Android App
+            </NavLink>
+          </div>
+        </footer>
       </div>
+      <InstallAppBanner />
+      <UpdateModal />
     </div>
   );
 }

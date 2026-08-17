@@ -37,8 +37,14 @@ function conditionIssue(condition, alphabet, index) {
   if (lengthTypes.has(condition.type) && !integer(condition.count ?? condition.value))
     return `Condition ${index + 1} requires a non-negative integer length.`;
   if (positionTypes.has(condition.type)) {
-    const pos = condition.type === 'secondToLastSymbol' ? (condition.position ?? 2) : condition.position;
-    if (!Number.isInteger(Number(pos)) || Number(pos) < 1)
+    const pos = condition.type === 'firstSymbol'
+      ? 1
+      : condition.type === 'secondToLastSymbol'
+      ? (condition.position === '' || condition.position === undefined ? 2 : condition.position)
+      : condition.type === 'lastSymbol'
+      ? 1
+      : condition.position;
+    if (condition.type !== 'lastSymbol' && (!Number.isInteger(Number(pos)) || Number(pos) < 1))
       return `Condition ${index + 1} requires a position greater than zero.`;
     if (!alphabet.includes(condition.symbol)) return `Condition ${index + 1} requires a symbol from the alphabet.`;
   }

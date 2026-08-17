@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, ChevronDown, LoaderCircle, Play, RotateCcw, XCircle, ArrowRight, Sparkles, Network, Pencil } from 'lucide-react';
+import { CheckCircle2, ChevronDown, LoaderCircle, Play, RotateCcw, XCircle, ArrowRight, Sparkles, Network, Pencil, Smartphone } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -202,7 +202,7 @@ export default function ResultPage() {
     const loopSides = {};
     for (const edge of edges) {
       if (edge.from === edge.to) {
-        loopSides[edge.from] = loopSide(edge, layout.positions, edges);
+        loopSides[edge.from] = loopSide(edge, layout.positions, edges, displayAutomaton.startState);
       }
     }
     const builderAutomaton = createBuilderAutomatonFromGenerated({
@@ -229,7 +229,7 @@ export default function ResultPage() {
           </h1>
           <p className="mt-2 text-ink-muted dark:text-ink-darkMuted">Generated from your language definition.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {isOriginalNfa && !conversionData && (
             <Button onClick={() => runConvert(false)} disabled={converting}>
               {converting ? <LoaderCircle className="animate-spin" size={16} /> : <Network size={16} />}
@@ -241,6 +241,9 @@ export default function ResultPage() {
           </Button>
           <Button to="/generate" variant="secondary">
             Create another
+          </Button>
+          <Button to="/download" variant="secondary">
+            <Smartphone size={16} /> Download AutoFA
           </Button>
         </div>
       </div>
