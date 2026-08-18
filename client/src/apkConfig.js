@@ -15,23 +15,9 @@
  * change (§14 / §8 of the v2.4.1 spec).
  */
 
-/**
- * Current installed application version.
- * Updated when releasing a new APK build.
- */
-export const CURRENT_APP_VERSION = '1.0.0';
-
-/**
- * Default latest available version (queried dynamically via /api/version when online).
- */
-export const LATEST_APP_VERSION = '1.0.0';
-
 export const APK_CONFIG = {
-  /** Current installed version */
-  currentVersion: CURRENT_APP_VERSION,
-
-  /** Displayed on the /download page and usable by the update system. */
-  version: LATEST_APP_VERSION,
+  /** Displayed on the /download page and usable by the future update system. */
+  version: '1.0.0',
 
   /**
    * Same-origin proxy endpoint that streams AutoFa.apk with attachment headers.
@@ -72,3 +58,11 @@ export const APK_CONFIG = {
     'Dark mode and mobile-optimised layout',
   ],
 };
+
+/**
+ * The version of the currently installed AutoFA APK.
+ * This is the single authoritative version constant used by the update system.
+ * Update APK_CONFIG.version above when publishing a new release — this export
+ * reflects that value automatically so there is no risk of them drifting apart.
+ */
+export const CURRENT_APP_VERSION = APK_CONFIG.version;

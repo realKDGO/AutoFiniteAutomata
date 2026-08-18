@@ -5,15 +5,17 @@ import {
   ANDROID_APP_INSTALL_URL,
   dismissInstallPrompt,
   isAndroidMobileBrowser,
+  openMedianApp,
   shouldShowInstallPrompt,
 } from '../lib/platform';
 
 /**
  * Android app install/get recommendation banner.
  *
- * Appears on Android mobile browsers and desktop browsers when not dismissed,
- * and never inside the Median APK or on iOS.
+ * Appears on Android mobile browsers when not dismissed,
+ * and never inside the Median APK, on desktop browsers, or on iOS.
  *
+ * Automatically attempts to launch the installed AutoFA app if present.
  * Hidden completely on the /download page.
  */
 export default function InstallAppBanner() {
@@ -26,8 +28,65 @@ export default function InstallAppBanner() {
   const isMobile = isAndroidMobileBrowser();
 
   useEffect(() => {
-    // Evaluate once on mount. Detection is synchronous and cheap.
-    setVisible(shouldShowInstallPrompt());
+    // Only attempt app launch / banner logic on Android mobile browsers.
+    // Median APK, iOS, and desktop are already excluded by shouldShowInstallPrompt.
+    if (!isAndroidMobileBrowser()) {
+      setVisible(shouldShowInstallPrompt());
+      return;
+    }
+
+    // Attempt to open the installed AutoFA app.
+    // openMedianApp() marks the session so it won't retry on the same page load.
+    const launched = openMedianApp();
+
+    if (!launched) {
+      // Either already attempted this session, or not an Android mobile browser.
+      // Evaluate banner eligibility normally.
+      setVisible(shouldShowInstallPrompt());
+      return;
+    }
+
+    // ── Page Visibility detection ──────────────────────────────────────────────
+    // After window.location.href fires an intent:// URL, Chrome on Android
+    // hands off to the OS intent dispatcher synchronously. If the target app
+    // is installed, the OS switches focus and this page goes hidden
+    // (document.visibilityState === 'hidden'). If the app is not installed,
+    // Chrome shows a system error dialog and the page stays visible.
+    //
+    // We listen for `visibilitychange` for up to HANDOFF_TIMEOUT_MS.
+    // • Page hides within the window → app launched → do NOT show banner.
+    // • Page stays visible past the timeout → app not installed → show banner.
+    // ──────────────────────────────────────────────────────────────────────────
+    const HANDOFF_TIMEOUT_MS = 2500;
+    let resolved = false;
+
+    const resolve = (appLaunched) => {
+      if (resolved) return;
+      resolved = true;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      clearTimeout(timer);
+      if (!appLaunched) {
+        // App not installed (or handoff failed) — show the install banner.
+        setVisible(shouldShowInstallPrompt());
+      }
+      // If appLaunched === true, banner stays hidden (default state = false).
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        resolve(true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    const timer = window.setTimeout(() => resolve(false), HANDOFF_TIMEOUT_MS);
+
+    return () => {
+      // Cleanup on unmount (e.g. route change before timeout fires).
+      resolved = true;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {

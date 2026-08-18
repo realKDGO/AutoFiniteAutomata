@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowUpCircle,
   CheckCircle2,
   Download,
+  Info,
   LoaderCircle,
   RefreshCw,
   Smartphone,
 } from 'lucide-react';
-import { APK_CONFIG, CURRENT_APP_VERSION, LATEST_APP_VERSION } from '../apkConfig';
-import { isAndroid, isIOS, isMedianApp } from '../lib/platform';
+import { APK_CONFIG, CURRENT_APP_VERSION } from '../apkConfig';
+import { isAndroid, isIOS, isMedianApp, medianDownloadFile, medianOpenFile } from '../lib/platform';
 import { isUpdateAvailable } from '../utils/semver';
 
 /**
@@ -23,9 +24,28 @@ import { isUpdateAvailable } from '../utils/semver';
  */
 export default function UpdateModal() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [latestVersion, setLatestVersion] = useState(LATEST_APP_VERSION);
-  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error'
+  const [latestVersion, setLatestVersion] = useState(APK_CONFIG.version);
+  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error' | 'unsupported'
   const [errorMessage, setErrorMessage] = useState('');
+
+  // The APK is downloaded exactly once (Download Update). "Install Update"
+  // uses the local APK reference / URI rather than re-downloading.
+  const downloadedApkRef = useRef(null);
+  const downloadInFlightRef = useRef(false);
+  const downloadWatchdogRef = useRef(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Cancel any pending download watchdog on unmount
+      if (downloadWatchdogRef.current) {
+        clearTimeout(downloadWatchdogRef.current);
+        downloadWatchdogRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     // Determine whether APK update checking applies to this client environment.
@@ -40,7 +60,7 @@ export default function UpdateModal() {
         const res = await fetch('/api/version');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const serverVersion = data.version || LATEST_APP_VERSION;
+        const serverVersion = data.version || APK_CONFIG.version;
 
         if (isMounted) {
           setLatestVersion(serverVersion);
@@ -50,7 +70,7 @@ export default function UpdateModal() {
         }
       } catch {
         // If offline or endpoint is unreachable, gracefully fall back to local config
-        if (isMounted && isUpdateAvailable(CURRENT_APP_VERSION, LATEST_APP_VERSION)) {
+        if (isMounted && isUpdateAvailable(CURRENT_APP_VERSION, APK_CONFIG.version)) {
           setUpdateAvailable(true);
         }
       }
@@ -66,31 +86,124 @@ export default function UpdateModal() {
   if (!updateAvailable) return null;
 
   const handleDownload = () => {
+    // Never allow multiple simultaneous downloads (e.g. double-tap).
+    if (downloadInFlightRef.current) return;
+    downloadInFlightRef.current = true;
+    downloadedApkRef.current = null;
+
     setDownloadState('downloading');
     setErrorMessage('');
 
-    try {
-      // Trigger download using the same-origin endpoint
-      const link = document.createElement('a');
-      link.href = APK_CONFIG.downloadUrl;
-      link.download = 'AutoFa.apk';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+    // Median requires a public, non-localhost URL (docs.median.co/docs/download-file),
+    // or same-origin proxy endpoint.
+    const absoluteApkUrl = new URL(APK_CONFIG.downloadUrl, window.location.origin).href;
 
-      // Transition to completed state after browser initiates download
-      setTimeout(() => {
-        setDownloadState('completed');
-      }, 2500);
+    try {
+      if (isMedianApp()) {
+        // ─────────────────────────────────────────────────────────────────
+        // Median Android app shell: use the native bridge to download.
+        // Only transition to 'completed' when the callback provides a real
+        // local file reference (content URI / file path). Never use the
+        // download URL itself as a substitute for a local file reference.
+        // ─────────────────────────────────────────────────────────────────
+        const started = medianDownloadFile({
+          url: absoluteApkUrl,
+          filename: 'AutoFa.apk',
+          open: false,
+          callback: (res) => {
+            // Cancel watchdog — callback fired.
+            if (downloadWatchdogRef.current) {
+              clearTimeout(downloadWatchdogRef.current);
+              downloadWatchdogRef.current = null;
+            }
+            downloadInFlightRef.current = false;
+
+            if (!isMountedRef.current) return;
+
+            // Accept only genuine local references (content URI, file path).
+            // res.url would be the original download URL — not a local ref.
+            const localRef = res?.uri || res?.path || res?.filePath;
+            if (localRef) {
+              downloadedApkRef.current = localRef;
+              setDownloadState('completed');
+            } else {
+              // Median responded but without a usable local file reference.
+              downloadedApkRef.current = null;
+              setDownloadState('error');
+              setErrorMessage(
+                'Download completed but no local file reference was received. Please try again.',
+              );
+            }
+          },
+        });
+
+        if (!started) throw new Error('median-bridge-unavailable');
+
+        // 60-second watchdog: if the Median callback never fires, surface an error.
+        downloadWatchdogRef.current = window.setTimeout(() => {
+          downloadWatchdogRef.current = null;
+          if (!downloadInFlightRef.current) return; // callback already resolved
+          downloadInFlightRef.current = false;
+          if (!isMountedRef.current) return;
+          downloadedApkRef.current = null;
+          setDownloadState('error');
+          setErrorMessage('Download timed out. Please try again.');
+        }, 60_000);
+      } else {
+        // ─────────────────────────────────────────────────────────────────
+        // Plain browser (desktop or non-Median Android):
+        // Trigger a standard browser download of the APK file.
+        // Install Update is not available outside the Median app shell.
+        // ─────────────────────────────────────────────────────────────────
+        const link = document.createElement('a');
+        link.href = APK_CONFIG.downloadUrl;
+        link.download = 'AutoFa.apk';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        downloadInFlightRef.current = false;
+        setDownloadState('unsupported');
+        setErrorMessage('APK installation via Install Update is only available inside the AutoFA Android app.');
+      }
     } catch {
+      if (downloadWatchdogRef.current) {
+        clearTimeout(downloadWatchdogRef.current);
+        downloadWatchdogRef.current = null;
+      }
+      downloadInFlightRef.current = false;
+      downloadedApkRef.current = null;
       setDownloadState('error');
-      setErrorMessage('Unable to download the update. Please try again.');
+      setErrorMessage('Unable to start the download. Please try again.');
     }
   };
 
   const handleInstall = () => {
-    // Launch/open the downloaded APK or re-trigger download to open Android installer
-    window.location.href = APK_CONFIG.downloadUrl;
+    if (!isMedianApp()) {
+      // Never attempt to force-install outside the Median Android app
+      setDownloadState('unsupported');
+      setErrorMessage('APK installation is only available inside the AutoFA Android app.');
+      return;
+    }
+
+    // Use the already-downloaded local APK reference — never download it again.
+    const localApkRef = downloadedApkRef.current;
+    if (!localApkRef) {
+      setDownloadState('error');
+      setErrorMessage('Local APK reference not found. Please download the update again.');
+      return;
+    }
+
+    // Open the local file via Median's openFile / FileProvider mechanism
+    const opened = medianOpenFile({
+      uri: localApkRef,
+      url: localApkRef,
+      filename: 'AutoFa.apk',
+    });
+
+    if (!opened) {
+      setDownloadState('error');
+      setErrorMessage('Unable to open the APK installer. Please try downloading the update again.');
+    }
   };
 
   return (
@@ -149,6 +262,14 @@ export default function UpdateModal() {
           </div>
         )}
 
+        {/* Informational notice when installation isn't supported in this environment (§6) */}
+        {downloadState === 'unsupported' && (
+          <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-primary/30 bg-primary-soft p-3 text-xs text-primary dark:border-primary/40 dark:bg-primary/10 dark:text-sky-300">
+            <Info size={16} className="shrink-0 mt-0.5" />
+            <span>{errorMessage || 'APK installation is only available inside the AutoFA Android app.'}</span>
+          </div>
+        )}
+
         {/* Success notification when download is complete */}
         {downloadState === 'completed' && (
           <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs font-medium text-success dark:border-success/40 dark:bg-success/10 dark:text-green-400">
@@ -192,7 +313,7 @@ export default function UpdateModal() {
             </button>
           )}
 
-          {downloadState === 'completed' && (
+          {(downloadState === 'completed' || downloadState === 'unsupported') && (
             <button
               type="button"
               onClick={handleInstall}

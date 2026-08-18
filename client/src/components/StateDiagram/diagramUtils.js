@@ -3,8 +3,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NODE_RADIUS = 32;
-const H_GAP = 190;   // horizontal gap between state centres in linear/layered layout
-const V_GAP = 160;   // vertical gap between rows in multi-row/layered layouts
+const H_GAP = 190;   // horizontal gap between state centres in linear layout
+const V_GAP = 160;   // vertical gap between rows in multi-row layouts
 const MARGIN_X = 115;
 const MARGIN_Y = 115;
 const LOOP_OFFSET = 102; // distance from node centre to loop apex
@@ -12,6 +12,12 @@ const LOOP_OFFSET = 102; // distance from node centre to loop apex
 // ─────────────────────────────────────────────────────────────────────────────
 // GEOMETRY SAFETY LAYER
 // ─────────────────────────────────────────────────────────────────────────────
+// The functions below make edgeGeometry() safe to call with either:
+//   (a) generated positions carrying layout metadata (col/index/gridRow/rowInLayer), or
+//   (b) manually positioned Builder states carrying only { x, y }.
+// Generated diagrams keep their exact existing behaviour (the metadata branch
+// below is taken whenever that metadata is present); Builder diagrams derive
+// an equivalent value from real coordinates instead of producing NaN.
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -20,6 +26,13 @@ function isFiniteNumber(value) {
 /**
  * Column/row separation between two laid-out points, used to decide edge
  * routing (straight vs. arched) and arc height.
+ *
+ * Generated layouts provide col/index and gridRow/rowInLayer directly, so
+ * this reproduces the original arithmetic exactly when that metadata exists.
+ * Manually positioned Builder states don't carry that metadata — for those,
+ * derive an equivalent "how many layout steps apart" value from the actual
+ * pixel distance instead of doing arithmetic on undefined values (which
+ * previously produced NaN and an unrenderable SVG path).
  */
 function gridSeparation(source, target) {
   const sourceCol = source.col ?? source.index;
@@ -41,7 +54,10 @@ function gridSeparation(source, target) {
 
 /**
  * Verifies a geometry object has finite path coordinates and a finite label
- * position.
+ * position. If the routing math above ever produces something non-finite
+ * (it shouldn't, once gridSeparation() is used — this is a safety net, not a
+ * substitute for correct math), fall back to a plain straight line between
+ * the given (always-finite) boundary points rather than emit an invalid path.
  */
 function safeGeometry(geometry, start, end) {
   const numbersInPath = geometry.path.match(/-?\d+(\.\d+)?/g) ?? [];
@@ -87,6 +103,7 @@ export function groupTransitions(automaton) {
   const groups = new Map();
   for (const from of automaton.states) {
     for (const [symbol, rawTargets] of Object.entries(automaton.transitions[from] ?? {})) {
+      // null means "no transition" in NFA representation — skip
       if (rawTargets === null || rawTargets === undefined) continue;
       const targets = Array.isArray(rawTargets) ? rawTargets : [rawTargets];
       for (const to of targets) {
@@ -105,7 +122,7 @@ export function groupTransitions(automaton) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GRAPH ANALYSIS & ORDERING
+// GRAPH ANALYSIS
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** BFS from startState; returns states in discovery order (excluding dead states). */
@@ -141,6 +158,7 @@ function assignLayers(automaton, deadStates, edges) {
       }
     }
   }
+  // Any unreached state gets placed at depth = max+1
   const maxDepth = Math.max(0, ...layers.values());
   for (const s of automaton.states) {
     if (!deadStates.has(s) && !layers.has(s)) layers.set(s, maxDepth + 1);
@@ -150,9 +168,11 @@ function assignLayers(automaton, deadStates, edges) {
 
 /**
  * Counts crossing pairs between straight-line edges given a position map.
+ * Uses a simple segment intersection test — sufficient as a layout score.
  */
 function countLinearCrossings(order, edgeList) {
   let crossings = 0;
+  // Build index map
   const idx = new Map(order.map((s, i) => [s, i]));
   const segments = edgeList
     .filter(e => e.from !== e.to && idx.has(e.from) && idx.has(e.to))
@@ -161,6 +181,7 @@ function countLinearCrossings(order, edgeList) {
     for (let j = i + 1; j < segments.length; j++) {
       const [a, b] = segments[i];
       const [c, d] = segments[j];
+      // Crossing if intervals overlap in the opposite direction
       if ((a < c && b > d) || (a > c && b < d) || (a < d && b > c && a > c)) crossings++;
       if ((c < a && d > b) || (c > a && d < b) || (c < b && d > a && c > a)) crossings++;
     }
@@ -193,8 +214,8 @@ function chooseLayout(liveStates, deadStates, edges) {
     biDirectional * 1 +
     selfLoops * 0.5;
 
-  if (n <= 6 && complexityScore < 6) return 'linear';
-  if (n <= 12 && complexityScore < 22) return 'layered';
+  if (n <= 7 && complexityScore < 6) return 'linear';
+  if (n <= 12 && complexityScore < 20) return 'layered';
   return 'grid';
 }
 
@@ -205,19 +226,13 @@ function chooseLayout(liveStates, deadStates, edges) {
 function linearLayout(order) {
   const positions = {};
   order.forEach((state, i) => {
-    positions[state] = {
-      x: MARGIN_X + i * H_GAP,
-      y: MARGIN_Y,
-      row: 'main',
-      index: i,
-      col: i,
-      rowInLayer: 0,
-    };
+    positions[state] = { x: MARGIN_X + i * H_GAP, y: MARGIN_Y, row: 'main', index: i };
   });
   return positions;
 }
 
-function layeredLayout(order, layers, edges) {
+function layeredLayout(order, layers) {
+  // Group states by layer
   const byLayer = new Map();
   for (const s of order) {
     const d = layers.get(s) ?? 0;
@@ -225,33 +240,13 @@ function layeredLayout(order, layers, edges) {
     byLayer.get(d).push(s);
   }
 
-  const sortedDepths = [...byLayer.keys()].sort((a, b) => a - b);
-
-  // Intra-layer barycenter ordering to minimize line crossings between adjacent layers
-  for (let i = 1; i < sortedDepths.length; i++) {
-    const prevDepth = sortedDepths[i - 1];
-    const currDepth = sortedDepths[i];
-    const prevStates = byLayer.get(prevDepth);
-    const currStates = byLayer.get(currDepth);
-
-    const prevIndexMap = new Map(prevStates.map((s, idx) => [s, idx]));
-
-    const stateBarycenter = currStates.map(state => {
-      const incoming = edges.filter(e => e.to === state && prevIndexMap.has(e.from));
-      if (incoming.length === 0) return { state, weight: 0 };
-      const avgIdx = incoming.reduce((sum, e) => sum + prevIndexMap.get(e.from), 0) / incoming.length;
-      return { state, weight: avgIdx };
-    });
-
-    stateBarycenter.sort((a, b) => a.weight - b.weight);
-    byLayer.set(currDepth, stateBarycenter.map(item => item.state));
-  }
-
   const positions = {};
+  const sortedDepths = [...byLayer.keys()].sort((a, b) => a - b);
   const maxInLayer = Math.max(...[...byLayer.values()].map(arr => arr.length));
 
   sortedDepths.forEach((depth, colIdx) => {
     const statesInLayer = byLayer.get(depth);
+    const totalHeight = (statesInLayer.length - 1) * V_GAP;
     const startY = MARGIN_Y + (maxInLayer - statesInLayer.length) * V_GAP * 0.5;
     statesInLayer.forEach((state, rowIdx) => {
       positions[state] = {
@@ -270,7 +265,8 @@ function layeredLayout(order, layers, edges) {
 
 function gridLayout(order) {
   const n = order.length;
-  const cols = Math.ceil(Math.sqrt(n * 1.4));
+  // Choose the grid dimensions aiming for roughly square shape
+  const cols = Math.ceil(Math.sqrt(n * 1.5));
   const positions = {};
   order.forEach((state, i) => {
     const col = i % cols;
@@ -292,6 +288,7 @@ function gridLayout(order) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function placeDeadStates(deadStates, positions, edges, liveStates) {
+  const liveIdx = new Map(liveStates.map((s, i) => [s, i]));
   const incoming = new Map([...deadStates].map(s => [s, []]));
   edges.forEach(edge => {
     if (deadStates.has(edge.to) && !deadStates.has(edge.from)) {
@@ -299,36 +296,26 @@ function placeDeadStates(deadStates, positions, edges, liveStates) {
     }
   });
 
+  // Find the bounding box of live positions
   const xs = Object.values(positions).map(p => p.x);
   const ys = Object.values(positions).map(p => p.y);
   const maxY = Math.max(...ys);
   const minX = Math.min(...xs);
 
-  const deadArray = [...deadStates];
-  const placedXs = [];
-
-  deadArray.forEach((state, di) => {
+  let extraIdx = 0;
+  [...deadStates].forEach((state, di) => {
     const sources = incoming.get(state) ?? [];
     const sourceXs = sources.map(s => positions[s]?.x).filter(v => v != null);
-    let targetX = sourceXs.length
+    const anchorX = sourceXs.length
       ? sourceXs.reduce((a, b) => a + b, 0) / sourceXs.length
-      : minX + di * H_GAP;
-
-    // Ensure distinct non-overlapping placement for multiple dead states
-    for (const prevX of placedXs) {
-      if (Math.abs(targetX - prevX) < H_GAP * 0.8) {
-        targetX = prevX + H_GAP;
-      }
-    }
-    placedXs.push(targetX);
+      : minX + extraIdx * H_GAP;
+    extraIdx++;
 
     positions[state] = {
-      x: targetX,
+      x: anchorX,
       y: maxY + V_GAP,
       row: 'dead',
       index: liveStates.length + di,
-      col: di,
-      gridRow: 99,
     };
   });
 }
@@ -346,7 +333,7 @@ export function layoutStates(automaton, deadStates = collectDeadStates(automaton
 
   let positions;
   if (strategy === 'layered') {
-    positions = layeredLayout(order, layers, edges);
+    positions = layeredLayout(order, layers);
   } else if (strategy === 'grid') {
     positions = gridLayout(order);
   } else {
@@ -357,13 +344,10 @@ export function layoutStates(automaton, deadStates = collectDeadStates(automaton
     placeDeadStates(deadStates, positions, edges, order);
   }
 
-  // Compute adaptive canvas dimensions
+  // Compute canvas dimensions from all positions
   const allPos = Object.values(positions);
-  const minX = Math.min(...allPos.map(p => p.x));
   const maxX = Math.max(...allPos.map(p => p.x));
-  const minY = Math.min(...allPos.map(p => p.y));
   const maxY = Math.max(...allPos.map(p => p.y));
-
   const width = Math.max(460, maxX + MARGIN_X + NODE_RADIUS + 60);
   const height = Math.max(280, maxY + MARGIN_Y + NODE_RADIUS + 80);
 
@@ -385,15 +369,12 @@ function boundaryPoint(from, to) {
 }
 
 /**
- * Choose the loop side that is least crowded by adjacent edges, start arrow, and arched paths.
+ * Choose the loop side that is least crowded by adjacent edges.
  * Preference order when scores tie: top > right > bottom > left.
  */
-export function loopSide(edge, positions, edges, startState = null) {
+export function loopSide(edge, positions, edges) {
   const point = positions[edge.from];
-  if (!point) return 'top';
   const score = { top: 0, right: 0, bottom: 0, left: 0 };
-
-  // 1. Incident edges
   const incident = edges.filter(
     other => other.key !== edge.key && (other.from === edge.from || other.to === edge.from)
   );
@@ -403,40 +384,11 @@ export function loopSide(edge, positions, edges, startState = null) {
     if (!target) continue;
     const dx = target.x - point.x;
     const dy = target.y - point.y;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      score[dx > 0 ? 'right' : 'left'] += 5;
-    } else {
-      score[dy > 0 ? 'bottom' : 'top'] += 5;
-    }
+    if (Math.abs(dx) > Math.abs(dy)) score[dx > 0 ? 'right' : 'left'] += 4;
+    else score[dy > 0 ? 'bottom' : 'top'] += 5;
   }
-
-  // 2. Start state has incoming start arrow on the left
-  if (edge.from === startState || (point.x === MARGIN_X && point.y === MARGIN_Y && point.row === 'main')) {
-    score.left += 15;
-  }
-
-  // 3. Spanning/arched edges passing over/under this state
-  for (const other of edges) {
-    if (other.from === other.to) continue;
-    const src = positions[other.from];
-    const tgt = positions[other.to];
-    if (!src || !tgt) continue;
-    const minEdgeX = Math.min(src.x, tgt.x);
-    const maxEdgeX = Math.max(src.x, tgt.x);
-    if (point.x > minEdgeX + 25 && point.x < maxEdgeX - 25) {
-      if (tgt.x < src.x) {
-        score.top += 6;   // Backward arcs arch TOP
-      } else {
-        score.bottom += 6; // Forward arcs arch BOTTOM
-      }
-    }
-  }
-
-  // 4. Dead states receive transitions dropping from above
-  if (point.row === 'dead') {
-    score.top += 12;
-  }
-
+  // Dead states tend to have transitions coming from above — avoid top
+  if (point.row === 'dead') score.top += 8;
   return Object.entries(score)
     .sort(
       (a, b) =>
@@ -451,7 +403,6 @@ function selfLoopGeometry(edge, positions, edges) {
   const r = NODE_RADIUS;
   const o = LOOP_OFFSET;
   const side = loopSide(edge, positions, edges);
-
   if (side === 'right') {
     const start = { x: p.x + r - 4, y: p.y - 15 };
     const end = { x: p.x + r - 4, y: p.y + 15 };
@@ -477,9 +428,9 @@ function selfLoopGeometry(edge, positions, edges) {
  * Computes path and label position for a regular (non-self) edge.
  * Handles:
  *   • dead-state incoming drop
- *   • bidirectional edge pair separation (opposite perpendicular bends)
- *   • long-span arc lifting (clearing intervening states)
- *   • short-range straight edges
+ *   • bidirectional edge pair separation
+ *   • long-span arc lifting
+ *   • general straight edges
  */
 export function edgeGeometry(edge, positions, edges) {
   const source = positions[edge.from] || (positions[edge.from?.name] ?? { x: 150, y: 160 });
@@ -518,27 +469,24 @@ export function edgeGeometry(edge, positions, edges) {
     );
   }
 
-  // --- Bidirectional pair: offset the two curves in opposite directions ---
+  // --- Bidirectional pair: offset the two arrows to avoid overlap ---
   const reverse = edges.find(other => other.from === edge.to && other.to === edge.from);
+
+  // Distance and angle
   const dx = target.x - source.x;
   const dy = target.y - source.y;
   const dist = Math.hypot(dx, dy) || 1;
 
   if (reverse) {
-    const offsetMag = 48;
-    const perpX = (-dy / dist) * offsetMag;
-    const perpY = (dx / dist) * offsetMag;
+    // Perpendicular offset to separate the two curves
+    const perpX = (-dy / dist) * 45;
+    const perpY = (dx / dist) * 45;
     const midX = (start.x + end.x) / 2 + perpX;
     const midY = (start.y + end.y) / 2 + perpY;
-
-    // Label placed on outer side of bend so it never crosses the curve
-    const labelX = midX + (perpX / offsetMag) * 12;
-    const labelY = midY + (perpY / offsetMag) * 12;
-
     return safeGeometry(
       {
         path: `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`,
-        label: { x: labelX, y: labelY },
+        label: { x: midX, y: midY - 12 },
         start,
         end,
       },
@@ -553,6 +501,7 @@ export function edgeGeometry(edge, positions, edges) {
 
   if (isNeighbour) {
     const labelMid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+    // Offset label slightly to the left of the direction vector
     const perpX = (-dy / dist) * 18;
     const perpY = (dx / dist) * 18;
     return safeGeometry(
@@ -567,17 +516,16 @@ export function edgeGeometry(edge, positions, edges) {
     );
   }
 
-  // --- Long arched edge (clears intervening nodes) ---
+  // --- Long arched edge ---
   const arcHeight = 70 + colDiff * 28 + rowDiff * 22;
-  const normX = (-dy / dist) * arcHeight;
-  const normY = (dx / dist) * arcHeight;
-  const midX = (start.x + end.x) / 2 + normX;
-  const midY = (start.y + end.y) / 2 + normY;
-
+  const perpX = (-dy / dist) * arcHeight;
+  const perpY = (dx / dist) * arcHeight;
+  const midX = (start.x + end.x) / 2 + perpX;
+  const midY = (start.y + end.y) / 2 + perpY;
   return safeGeometry(
     {
       path: `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`,
-      label: { x: midX + (normX / (arcHeight || 1)) * 14, y: midY + (normY / (arcHeight || 1)) * 14 },
+      label: { x: midX, y: midY - 12 },
       start,
       end,
     },
@@ -591,7 +539,7 @@ export function edgeGeometry(edge, positions, edges) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function labelBox(point, text) {
-  const width = Math.max(34, (text ?? '').length * 7.5 + 10);
+  const width = Math.max(34, text.length * 7.2);
   return { x: point.x - width / 2, y: point.y - 12, width, height: 18 };
 }
 
@@ -604,18 +552,13 @@ export function labelIntersectsLabel(a, b) {
   );
 }
 
-export function labelIntersectsState(labelPt, statePt, radius = NODE_RADIUS + 8) {
-  return Math.hypot(labelPt.x - statePt.x, labelPt.y - statePt.y) < radius;
-}
-
 /**
- * Adjusts label positions to avoid overlaps with previously placed labels and state nodes.
+ * For each edge geometry, push the label position until it no longer overlaps
+ * previously placed labels. Also tries horizontal offsets.
  */
 export function routeEdges(edges, layout) {
   const { positions } = layout;
-  const statePoints = Object.values(positions);
   const occupied = [];
-
   return edges.map(edge => {
     const geometry = edgeGeometry(edge, positions, edges);
     const adjusted = { ...geometry, label: { ...geometry.label } };
@@ -626,16 +569,15 @@ export function routeEdges(edges, layout) {
 
     let attempts = 0;
     while (
-      (occupied.some(existing => labelIntersectsLabel(candidate, existing)) ||
-       statePoints.some(pt => labelIntersectsState(adjusted.label, pt))) &&
-      attempts < 14
+      occupied.some(existing => labelIntersectsLabel(candidate, existing)) &&
+      attempts < 12
     ) {
       if (attempts % 3 === 0) {
         adjusted.label.y += isSelf || isDead ? 20 : -22;
       } else if (attempts % 3 === 1) {
-        adjusted.label.x += 24;
+        adjusted.label.x += 22;
       } else {
-        adjusted.label.x -= 48;
+        adjusted.label.x -= 44;
       }
       candidate = labelBox(adjusted.label, edge.label);
       attempts++;
@@ -646,13 +588,12 @@ export function routeEdges(edges, layout) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GEOMETRY HELPERS (used for intersection detection)
+// GEOMETRY HELPERS (used by StateDiagram for edge crossing detection)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function orientation(a, b, c) {
   return Math.sign((b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y));
 }
-
 export function edgeIntersectsEdge(a, b, c, d) {
   const o1 = orientation(a, b, c);
   const o2 = orientation(a, b, d);
@@ -660,7 +601,6 @@ export function edgeIntersectsEdge(a, b, c, d) {
   const o4 = orientation(c, d, b);
   return o1 !== o2 && o3 !== o4;
 }
-
 export function edgeIntersectsState(start, end, state, radius = NODE_RADIUS + 8) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;

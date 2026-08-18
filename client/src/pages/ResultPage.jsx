@@ -202,7 +202,7 @@ export default function ResultPage() {
     const loopSides = {};
     for (const edge of edges) {
       if (edge.from === edge.to) {
-        loopSides[edge.from] = loopSide(edge, layout.positions, edges, displayAutomaton.startState);
+        loopSides[edge.from] = loopSide(edge, layout.positions, edges);
       }
     }
     const builderAutomaton = createBuilderAutomatonFromGenerated({

@@ -124,8 +124,8 @@ test('Test Case E: Starts with 1 AND ends with 01 over {0,1}', () => {
     assert.equal(simulateInput(automaton, str).accepted, false, `Should reject: "${str}"`);
   }
 
-  // Minimal DFA states for startsWith('1') AND endsWith('01'): 5 states (Start, 1-seen/no-0, 1...0 seen, 1...01 accept, dead)
-  assert.equal(automaton.states.length <= 5, true);
+  // Minimal DFA states for startsWith('1') AND endsWith('01'): 4 states (Start, 1-seen/no-0, 1...0 seen, 1...01 accept, dead)
+  assert.equal(automaton.states.length <= 4, true);
   assert.equal(automaton.startState, 'A');
 });
 

@@ -34,7 +34,7 @@ export const buildLastSymbolAutomaton = ({ alphabet, symbol }) => {
   for (const current of alphabet) {
     transitions.start[current] = current === symbol ? 'accept' : 'reject';
     transitions.accept[current] = current === symbol ? 'accept' : 'reject';
-    transitions.reject[current] = current === symbol ? 'reject' : 'reject';
+    transitions.reject[current] = current === symbol ? 'accept' : 'reject';
   }
   return make({
     alphabet,

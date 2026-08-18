@@ -126,6 +126,137 @@ export function isAndroidMobileBrowser() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Median Native Bridge Integration (Median.co / GoNative)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Downloads a file using the Median native bridge if available.
+ * 
+ * Supports callback/listeners if provided by Median native bridge, and
+ * returns a boolean or response indicating whether the native download started.
+ *
+ * @param {Object} options
+ * @param {string} options.url - Absolute URL of the file to download
+ * @param {string} [options.filename] - Target filename
+ * @param {boolean} [options.open] - Whether to immediately prompt to open/install
+ * @param {Function} [options.callback] - Optional completion/status callback
+ * @returns {boolean}
+ */
+export function medianDownloadFile(options) {
+  try {
+    if (typeof window === 'undefined') return false;
+    const { url, filename = 'AutoFa.apk', open = false, callback } = options || {};
+    if (!url) return false;
+
+    // Check window.median.downloads or window.gonative.downloads
+    const bridge = window.median || window.Median || window.gonative;
+
+    if (bridge?.downloads?.downloadFile) {
+      bridge.downloads.downloadFile({ url, filename, open, callback });
+      return true;
+    }
+
+    if (typeof bridge?.downloadFile === 'function') {
+      bridge.downloadFile({ url, filename, open, callback });
+      return true;
+    }
+
+    // Median URL scheme bridge fallback (gonative://downloads/downloadFile)
+    if (isMedianApp()) {
+      const params = new URLSearchParams();
+      params.set('url', url);
+      if (filename) params.set('filename', filename);
+      if (open) params.set('open', 'true');
+      window.location.href = `gonative://downloads/downloadFile?${params.toString()}`;
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Opens an already-downloaded local file/URI/path or local reference via Median native bridge.
+ * Android package installer requires FileProvider/content URI handling which Median's openFile /
+ * downloads.openFile handles natively without re-downloading.
+ *
+ * @param {Object} options
+ * @param {string} [options.uri] - Local content URI or file path returned after download
+ * @param {string} [options.url] - URL or reference of the downloaded file
+ * @param {string} [options.filename] - Filename on device
+ * @returns {boolean}
+ */
+export function medianOpenFile(options) {
+  try {
+    if (typeof window === 'undefined') return false;
+    const { uri, url, filename = 'AutoFa.apk' } = options || {};
+    const target = uri || url;
+    if (!target) return false;
+
+    const bridge = window.median || window.Median || window.gonative;
+
+    if (bridge?.downloads?.openFile) {
+      bridge.downloads.openFile({ uri: target, url: target, filename });
+      return true;
+    }
+
+    if (typeof bridge?.openFile === 'function') {
+      bridge.openFile({ uri: target, url: target, filename });
+      return true;
+    }
+
+    // Median URL scheme bridge fallback (gonative://downloads/openFile)
+    if (isMedianApp()) {
+      const params = new URLSearchParams();
+      params.set('url', target);
+      if (filename) params.set('filename', filename);
+      window.location.href = `gonative://downloads/openFile?${params.toString()}`;
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attempts to open the AutoFA Android app from a mobile browser using Android Intent / App Links.
+ * Only attempts once per session to prevent infinite redirect loops.
+ *
+ * @returns {boolean} True if the launch attempt was triggered
+ */
+export function openMedianApp() {
+  try {
+    if (typeof window === 'undefined') return false;
+    if (!isAndroidMobileBrowser()) return false;
+
+    // Guard against repeated attempts or redirect loops in the current session.
+    if (sessionStorage.getItem('autofa_app_launch_attempted') === '1') {
+      return false;
+    }
+    sessionStorage.setItem('autofa_app_launch_attempted', '1');
+
+    // Android Intent URI — targets the installed AutoFA APK by package ID.
+    // On Chrome for Android, window.location.href with an intent:// URL hands
+    // control to the Android OS intent dispatcher. If the app is installed the
+    // OS switches to it and the page becomes hidden (visibilitychange fires).
+    // If the app is not installed, Chrome shows a system error and the page
+    // stays visible. The caller (InstallAppBanner) uses the Page Visibility
+    // API to determine which outcome occurred.
+    const intentUrl =
+      'intent://autofa.vercel.app/#Intent;scheme=https;package=co.median.android.jbjpjqx;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end';
+
+    window.location.href = intentUrl;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Install-prompt eligibility + dismissal persistence
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -160,15 +291,18 @@ export function dismissInstallPrompt() {
  * Single entry point the UI should call: "should the install recommendation
  * render right now?" Folds together platform eligibility + prior dismissal
  * so AppLayout doesn't need to know the individual rules.
+ *
+ * Desktop browsers and Median APK never show the install prompt.
+ * Only Android mobile browsers that have not dismissed it are eligible.
  */
 export function shouldShowInstallPrompt() {
   try {
-    if (isMedianApp() || isIOS()) return false;
+    if (isMedianApp() || isIOS() || isDesktopBrowser()) return false;
     if (isInstallPromptDismissed()) return false;
-    return isAndroidMobileBrowser() || isDesktopBrowser();
+    return isAndroidMobileBrowser();
   } catch {
     // Detection failure of any kind → default to NOT showing the prompt,
-    // i.e. normal website behavior (§21).
+    // i.e. normal website behavior.
     return false;
   }
 }

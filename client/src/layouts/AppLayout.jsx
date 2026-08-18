@@ -3,7 +3,8 @@ import { Menu, Moon, Sun, X } from 'lucide-react';
 import logo from '../assets/logo.png';
 import InstallAppBanner from '../components/InstallAppBanner';
 import UpdateModal from '../components/UpdateModal';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { isMedianApp } from '../lib/platform';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 const links = [['/', 'Home'], ['/builder', 'Builder'], ['/generate', 'Generator'], ['/result', 'Results'], ['/about', 'About']];
 function Brand() { return <NavLink to="/" className="focus-ring mb-9 flex items-center gap-2 font-display text-xl font-bold text-ink dark:text-ink-dark"><img src={logo} alt="AutoFA" className="size-9 rounded-xl object-cover shadow-sm" />AutoFA</NavLink>; }
 function ThemeButton({ dark, setDark, compact = false }) { return <button className={`focus-ring flex ${compact ? '' : 'w-full'} items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-muted transition hover:bg-primary-soft hover:text-primary dark:text-ink-darkMuted dark:hover:bg-primary/15`} onClick={() => setDark(value => !value)} aria-label="Toggle colour theme">{dark ? <Sun size={18} /> : <Moon size={18} />}{!compact && (dark ? 'Light mode' : 'Dark mode')}</button>; }
@@ -11,6 +12,7 @@ export default function AppLayout() {
   const [dark, setDark] = useState(() => localStorage.theme === 'dark');
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
+  const insideMedian = isMedianApp();
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); localStorage.theme = dark ? 'dark' : 'light'; }, [dark]);
   // Close the mobile sidebar automatically on route change (kept mounted for
   // its own close animation, see the always-rendered panel below).
@@ -66,16 +68,18 @@ export default function AppLayout() {
         </main>
 
         <footer className="border-t border-line px-5 py-7 text-center text-sm text-ink-muted dark:border-line-dark dark:text-ink-darkMuted">
-          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
-            <span>© 2026 AutoFA · A learning tool for formal languages.</span>
-            <span aria-hidden="true" className="hidden sm:inline opacity-40">·</span>
-            <NavLink
-              to="/download"
-              className="focus-ring font-medium text-primary hover:underline dark:text-sky-400"
-            >
-              Android App
-            </NavLink>
-          </div>
+          <span>© 2026 AutoFA · A learning tool for formal languages.</span>
+          {!insideMedian && (
+            <>
+              <span className="mx-2" aria-hidden="true">·</span>
+              <Link
+                to="/download"
+                className="focus-ring rounded font-medium text-primary hover:underline dark:text-sky-300"
+              >
+                Android App
+              </Link>
+            </>
+          )}
         </footer>
       </div>
       <InstallAppBanner />
