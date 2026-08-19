@@ -4,30 +4,15 @@ import {
   ArrowUpCircle,
   CheckCircle2,
   Download,
-  Info,
   LoaderCircle,
   RefreshCw,
-  Smartphone,
 } from 'lucide-react';
 import { APK_CONFIG } from '../apkConfig';
 import ReleaseNotesMarkdown from './ReleaseNotesMarkdown';
-import { getMedianAppVersion, isMedianApp, medianOpenFile, medianShareDownloadFile } from '../lib/platform';
+import { getMedianAppVersion, isMedianApp, medianShareDownloadFile } from '../lib/platform';
 import { isUpdateAvailable } from '../utils/semver';
 
 const NATIVE_DOWNLOAD_SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
-
-function getLocalApkReference(result) {
-  if (!result || typeof result !== 'object') return null;
-  const fields = ['uri', 'path', 'filePath', 'file', 'location'];
-  for (const field of fields) {
-    const value = result[field];
-    if (typeof value === 'string' && /^(content:\/\/|file:\/\/|\/)/i.test(value)) {
-      console.info('[AutoFA update] native local APK reference', { field, value });
-      return value;
-    }
-  }
-  return null;
-}
 
 /**
  * UpdateModal component.
@@ -46,14 +31,10 @@ export default function UpdateModal() {
   // automatically for every future release with zero code changes (§4).
   const [releaseName, setReleaseName] = useState(null);
   const [releaseNotes, setReleaseNotes] = useState(null);
-  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error' | 'unsupported'
+  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'native_open' | 'error'
   const [errorMessage, setErrorMessage] = useState('');
   const [downloadStatus, setDownloadStatus] = useState('');
-  const [downloadProgress, setDownloadProgress] = useState(null);
 
-  // The APK is downloaded exactly once (Download Update). "Install Update"
-  // uses the local APK reference / URI rather than re-downloading.
-  const downloadedApkRef = useRef(null);
   const downloadInFlightRef = useRef(false);
   const downloadWatchdogRef = useRef(null);
   const isMountedRef = useRef(true);
@@ -118,12 +99,9 @@ export default function UpdateModal() {
     // Never allow multiple simultaneous downloads (e.g. double-tap).
     if (downloadInFlightRef.current) return;
     downloadInFlightRef.current = true;
-    downloadedApkRef.current = null;
-
     setDownloadState('downloading');
     setErrorMessage('');
     setDownloadStatus('Preparing download...');
-    setDownloadProgress(null);
 
     // Native Median downloads use GitHub's public, absolute asset URL. The
     // browser /download flow continues using the same-origin proxy.
@@ -139,31 +117,22 @@ export default function UpdateModal() {
         downloadWatchdogRef.current = window.setTimeout(() => {
           if (!downloadInFlightRef.current || !isMountedRef.current) return;
           downloadInFlightRef.current = false;
-          downloadedApkRef.current = null;
           setDownloadState('error');
           setDownloadStatus('');
           setErrorMessage('The native download did not finish. Please try again.');
         }, NATIVE_DOWNLOAD_SAFETY_TIMEOUT_MS);
-        const result = await medianShareDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: false });
+        const result = await medianShareDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: true });
         if (downloadWatchdogRef.current) clearTimeout(downloadWatchdogRef.current);
         downloadWatchdogRef.current = null;
         // A late native callback must not overwrite the safety-timeout error.
         if (!isMountedRef.current || !downloadInFlightRef.current) return;
         downloadInFlightRef.current = false;
-        const localRef = getLocalApkReference(result);
-        if (!localRef) {
-          console.warn('[AutoFA update] native download completed without a local APK reference', result);
-          downloadedApkRef.current = null;
-          setDownloadState('error');
-          setDownloadStatus('');
-          setErrorMessage('Download completed but the native app did not return an installable APK reference. Please try again.');
-          return;
-        }
-        downloadedApkRef.current = localRef;
-        setDownloadProgress({ received: 1, total: 1 });
-        setDownloadStatus('Ready to install.');
-        setDownloadState('completed');
-        console.info('[AutoFA update] download state changed', 'completed');
+        // Median owns the downloaded file and opens it natively when
+        // `open: true` is set. A file URI is neither expected nor required.
+        console.info('[AutoFA update] native download/open completed', result);
+        setDownloadStatus('Download complete. Opening Android installer...');
+        setDownloadState('native_open');
+        console.info('[AutoFA update] download state changed', 'native_open');
       } else {
         // ─────────────────────────────────────────────────────────────────
         // Plain browser (desktop or non-Median Android):
@@ -186,43 +155,9 @@ export default function UpdateModal() {
         downloadWatchdogRef.current = null;
       }
       downloadInFlightRef.current = false;
-      downloadedApkRef.current = null;
       setDownloadState('error');
       setDownloadStatus('');
       setErrorMessage('Unable to start the download. Please try again.');
-    }
-  };
-
-  const handleInstall = () => {
-    if (!isMedianApp()) {
-      // Never attempt to force-install outside the Median Android app
-      setDownloadState('unsupported');
-      setErrorMessage('APK installation is only available inside the AutoFA Android app.');
-      return;
-    }
-
-    // Use the already-downloaded local APK reference — never download it again.
-    const localApkRef = downloadedApkRef.current;
-    if (!localApkRef) {
-      setDownloadState('error');
-      setErrorMessage('Local APK reference not found. Please download the update again.');
-      return;
-    }
-
-    // Open the local file via Median's openFile / FileProvider mechanism
-    const opened = medianOpenFile({
-      uri: localApkRef,
-      url: localApkRef,
-      filename: 'AutoFa.apk',
-    });
-
-    if (!opened) {
-      // §7D: the install dispatch itself failed (bridge unavailable/threw) —
-      // the local APK reference is still valid, so keep it and let the user
-      // retry installing directly rather than forcing a redundant re-download.
-      downloadedApkRef.current = localApkRef;
-      setDownloadState('install_error');
-      setErrorMessage('Unable to open the APK installer. Please try installing again.');
     }
   };
 
@@ -293,28 +228,13 @@ export default function UpdateModal() {
           </div>
         )}
 
-        {/* Informational notice when installation isn't supported in this environment (§6) */}
-        {downloadState === 'unsupported' && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-primary/30 bg-primary-soft p-3 text-xs text-primary dark:border-primary/40 dark:bg-primary/10 dark:text-sky-300">
-            <Info size={16} className="shrink-0 mt-0.5" />
-            <span>{errorMessage || 'APK installation is only available inside the AutoFA Android app.'}</span>
-          </div>
-        )}
-
-        {/* Success notification when download is complete */}
-        {downloadState === 'completed' && (
+        {downloadState === 'native_open' && (
           <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs font-medium text-success dark:border-success/40 dark:bg-success/10 dark:text-green-400">
             <CheckCircle2 size={16} className="shrink-0" />
-            <span>Download complete. Ready to install.</span>
+            <span>{downloadStatus}</span>
           </div>
         )}
         {downloadState === 'downloading' && (() => {
-          const percent = downloadProgress
-            ? Math.min(100, Math.round((downloadProgress.received / downloadProgress.total) * 100))
-            : null;
-          const formatBytes = (value) => value >= 1024 * 1024
-            ? `${(value / (1024 * 1024)).toFixed(1)} MB`
-            : `${Math.round(value / 1024)} KB`;
           return (
             <div className="mt-4 rounded-xl border border-primary/25 bg-primary-soft/50 p-3.5 dark:border-primary/35 dark:bg-primary/10">
               <div className="flex items-center gap-2 text-xs font-semibold text-ink dark:text-ink-dark">
@@ -322,17 +242,8 @@ export default function UpdateModal() {
                 <span>{downloadStatus || 'Downloading AutoFA update...'}</span>
               </div>
               <div className="mt-3 h-2 overflow-hidden rounded-full bg-primary/15 dark:bg-white/10">
-                {percent === null ? (
-                  <div className="h-full w-2/5 animate-pulse rounded-full bg-primary dark:bg-sky-300" />
-                ) : (
-                  <div className="h-full rounded-full bg-primary transition-[width] duration-300 dark:bg-sky-300" style={{ width: `${percent}%` }} />
-                )}
+                <div className="h-full w-2/5 animate-pulse rounded-full bg-primary dark:bg-sky-300" />
               </div>
-              {percent !== null && (
-                <p className="mt-2 text-xs text-ink-muted dark:text-ink-darkMuted">
-                  {percent}% downloaded · {formatBytes(downloadProgress.received)} of {formatBytes(downloadProgress.total)}
-                </p>
-              )}
             </div>
           );
         })()}
@@ -346,14 +257,14 @@ export default function UpdateModal() {
               className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-hover active:scale-[0.98]"
             >
               <Download size={18} />
-              Download Update
+              Download &amp; Install Update
             </button>
           )}
 
           {downloadState === 'downloading' && (
-            <button type="button" disabled className="focus-ring inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-success px-4 py-3 text-sm font-semibold text-white opacity-50">
-              <Smartphone size={18} />
-              Install Update
+            <button type="button" disabled className="focus-ring inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-primary-hover px-4 py-3 text-sm font-semibold text-white opacity-80">
+              <LoaderCircle size={18} className="animate-spin" />
+              Downloading update...
             </button>
           )}
 
@@ -364,33 +275,10 @@ export default function UpdateModal() {
               className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-hover active:scale-[0.98]"
             >
               <RefreshCw size={18} />
-              Retry Download
+              Retry Update
             </button>
           )}
 
-          {(downloadState === 'completed' || downloadState === 'unsupported') && (
-            <button
-              type="button"
-              onClick={handleInstall}
-              className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-success px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-[0.98]"
-            >
-              <Smartphone size={18} />
-              Install Update
-            </button>
-          )}
-
-          {/* §7D: install dispatch failed but the downloaded APK is still valid —
-              retry the install itself, don't force the user through another download. */}
-          {downloadState === 'install_error' && (
-            <button
-              type="button"
-              onClick={handleInstall}
-              className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-success px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-[0.98]"
-            >
-              <RefreshCw size={18} />
-              Retry Install
-            </button>
-          )}
         </div>
       </div>
     </div>
