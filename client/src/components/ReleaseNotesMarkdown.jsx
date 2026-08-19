@@ -19,6 +19,15 @@ function inline(text) {
   });
 }
 
+function inlineLines(lines) {
+  return lines.map((line, index) => (
+    <Fragment key={index}>
+      {index > 0 && <br />}
+      {inline(line)}
+    </Fragment>
+  ));
+}
+
 export default function ReleaseNotesMarkdown({ markdown }) {
   const lines = String(markdown || '').replace(/\r/g, '').split('\n');
   const nodes = [];
@@ -29,7 +38,8 @@ export default function ReleaseNotesMarkdown({ markdown }) {
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       const Tag = `h${heading[1].length}`;
-      nodes.push(<Tag key={index} className="mt-3 text-sm font-bold first:mt-0">{inline(heading[2])}</Tag>);
+      const headingClasses = ['mt-4 text-base font-bold first:mt-0', 'mt-3 text-sm font-bold', 'mt-3 text-xs font-bold uppercase tracking-wide'];
+      nodes.push(<Tag key={index} className={headingClasses[heading[1].length - 1]}>{inline(heading[2])}</Tag>);
       index += 1; continue;
     }
     const list = line.match(/^\s*([-*+] |\d+\. )(.+)$/);
@@ -46,7 +56,7 @@ export default function ReleaseNotesMarkdown({ markdown }) {
     }
     const paragraph = [];
     while (index < lines.length && lines[index].trim() && !/^(#{1,3}\s+|\s*[-*+]\s+|\s*\d+\.\s+)/.test(lines[index])) paragraph.push(lines[index++]);
-    nodes.push(<p key={index} className="mt-2 first:mt-0">{inline(paragraph.join(' '))}</p>);
+    nodes.push(<p key={index} className="mt-3 first:mt-0">{inlineLines(paragraph)}</p>);
   }
   return <div className="max-h-40 overflow-y-auto pr-1 text-xs leading-5 text-ink dark:text-ink-dark">{nodes}</div>;
 }

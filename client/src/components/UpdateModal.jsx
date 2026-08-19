@@ -33,6 +33,8 @@ export default function UpdateModal() {
   const [releaseNotes, setReleaseNotes] = useState(null);
   const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error' | 'unsupported'
   const [errorMessage, setErrorMessage] = useState('');
+  const [downloadStatus, setDownloadStatus] = useState('');
+  const [downloadProgress, setDownloadProgress] = useState(null);
 
   // The APK is downloaded exactly once (Download Update). "Install Update"
   // uses the local APK reference / URI rather than re-downloading.
@@ -105,6 +107,8 @@ export default function UpdateModal() {
 
     setDownloadState('downloading');
     setErrorMessage('');
+    setDownloadStatus('Preparing download...');
+    setDownloadProgress(null);
 
     // Native Median downloads use GitHub's public, absolute asset URL. The
     // browser /download flow continues using the same-origin proxy.
@@ -122,15 +126,26 @@ export default function UpdateModal() {
           url: directApkUrl,
           filename: 'AutoFa.apk',
           onEvent: (res) => {
-            if (res?.event === 'progress') return;
-            // Cancel watchdog — callback fired.
-            if (downloadWatchdogRef.current) {
-              clearTimeout(downloadWatchdogRef.current);
-              downloadWatchdogRef.current = null;
-            }
-            downloadInFlightRef.current = false;
-
             if (!isMountedRef.current) return;
+            if (res?.event === 'progress') {
+              const received = Number(res.bytesWritten);
+              const total = Number(res.expectedBytes);
+              if (Number.isFinite(received) && Number.isFinite(total) && total > 0) {
+                setDownloadProgress({ received, total });
+              }
+              setDownloadStatus('Downloading AutoFA update...');
+              return;
+            }
+            if (res?.event === 'error') {
+              downloadInFlightRef.current = false;
+              downloadedApkRef.current = null;
+              setDownloadState('error');
+              setDownloadStatus('');
+              setErrorMessage(res.errorMessage || 'Unable to download the update. Please try again.');
+              return;
+            }
+            if (res?.event && res.event !== 'done') return;
+            downloadInFlightRef.current = false;
 
             // Accept only genuine local references (content URI, file path).
             // res.url would be the original download URL — not a local ref.
@@ -138,10 +153,13 @@ export default function UpdateModal() {
             if (localRef) {
               downloadedApkRef.current = localRef;
               setDownloadState('completed');
+              setDownloadStatus('Ready to install.');
+              setDownloadProgress({ received: 1, total: 1 });
             } else {
               // Median responded but without a usable local file reference.
               downloadedApkRef.current = null;
               setDownloadState('error');
+              setDownloadStatus('');
               setErrorMessage(res?.errorMessage || 'Download could not be completed. Please try again.');
             }
           },
@@ -153,8 +171,10 @@ export default function UpdateModal() {
           // one or start a timeout that can falsely report a failed download.
           const dispatched = medianDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: true });
           if (!dispatched) throw new Error('median-bridge-unavailable');
-          downloadInFlightRef.current = false;
-          setDownloadState('native_install');
+          // This bridge flavour does not expose download events. Keep an
+          // honest indeterminate state and leave Install disabled; Android
+          // opens its installer itself when the native download completes.
+          setDownloadStatus('Downloading AutoFA update... Android will open the installer when it is ready.');
         }
       } else {
         // ─────────────────────────────────────────────────────────────────
@@ -180,6 +200,7 @@ export default function UpdateModal() {
       downloadInFlightRef.current = false;
       downloadedApkRef.current = null;
       setDownloadState('error');
+      setDownloadStatus('');
       setErrorMessage('Unable to start the download. Please try again.');
     }
   };
@@ -299,12 +320,34 @@ export default function UpdateModal() {
             <span>Download complete. Ready to install.</span>
           </div>
         )}
-        {downloadState === 'native_install' && (
-          <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs font-medium text-success dark:border-success/40 dark:bg-success/10 dark:text-green-400">
-            <CheckCircle2 size={16} className="shrink-0" />
-            <span>Download started. Android will show the installer when it is ready.</span>
-          </div>
-        )}
+        {downloadState === 'downloading' && (() => {
+          const percent = downloadProgress
+            ? Math.min(100, Math.round((downloadProgress.received / downloadProgress.total) * 100))
+            : null;
+          const formatBytes = (value) => value >= 1024 * 1024
+            ? `${(value / (1024 * 1024)).toFixed(1)} MB`
+            : `${Math.round(value / 1024)} KB`;
+          return (
+            <div className="mt-4 rounded-xl border border-primary/25 bg-primary-soft/50 p-3.5 dark:border-primary/35 dark:bg-primary/10">
+              <div className="flex items-center gap-2 text-xs font-semibold text-ink dark:text-ink-dark">
+                <LoaderCircle size={15} className="animate-spin text-primary dark:text-sky-300" />
+                <span>{downloadStatus || 'Downloading AutoFA update...'}</span>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-primary/15 dark:bg-white/10">
+                {percent === null ? (
+                  <div className="h-full w-2/5 animate-pulse rounded-full bg-primary dark:bg-sky-300" />
+                ) : (
+                  <div className="h-full rounded-full bg-primary transition-[width] duration-300 dark:bg-sky-300" style={{ width: `${percent}%` }} />
+                )}
+              </div>
+              {percent !== null && (
+                <p className="mt-2 text-xs text-ink-muted dark:text-ink-darkMuted">
+                  {percent}% downloaded · {formatBytes(downloadProgress.received)} of {formatBytes(downloadProgress.total)}
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Action Button */}
         <div className="mt-6">
@@ -320,13 +363,9 @@ export default function UpdateModal() {
           )}
 
           {downloadState === 'downloading' && (
-            <button
-              type="button"
-              disabled
-              className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary-hover px-4 py-3 text-sm font-semibold text-white opacity-85 cursor-not-allowed"
-            >
-              <LoaderCircle size={18} className="animate-spin" />
-              Downloading update...
+            <button type="button" disabled className="focus-ring inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-success px-4 py-3 text-sm font-semibold text-white opacity-50">
+              <Smartphone size={18} />
+              Install Update
             </button>
           )}
 
