@@ -11,8 +11,23 @@ import {
 } from 'lucide-react';
 import { APK_CONFIG } from '../apkConfig';
 import ReleaseNotesMarkdown from './ReleaseNotesMarkdown';
-import { getMedianAppVersion, isMedianApp, medianDownloadFile, medianDownloadTrackedFile, medianOpenFile } from '../lib/platform';
+import { getMedianAppVersion, isMedianApp, medianOpenFile, medianShareDownloadFile } from '../lib/platform';
 import { isUpdateAvailable } from '../utils/semver';
+
+const NATIVE_DOWNLOAD_SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
+
+function getLocalApkReference(result) {
+  if (!result || typeof result !== 'object') return null;
+  const fields = ['uri', 'path', 'filePath', 'file', 'location'];
+  for (const field of fields) {
+    const value = result[field];
+    if (typeof value === 'string' && /^(content:\/\/|file:\/\/|\/)/i.test(value)) {
+      console.info('[AutoFA update] native local APK reference', { field, value });
+      return value;
+    }
+  }
+  return null;
+}
 
 /**
  * UpdateModal component.
@@ -116,66 +131,39 @@ export default function UpdateModal() {
 
     try {
       if (isMedianApp()) {
-        // ─────────────────────────────────────────────────────────────────
-        // Median Android app shell: use the native bridge to download.
-        // Only transition to 'completed' when the callback provides a real
-        // local file reference (content URI / file path). Never use the
-        // download URL itself as a substitute for a local file reference.
-        // ─────────────────────────────────────────────────────────────────
-        const started = await medianDownloadTrackedFile({
-          url: directApkUrl,
-          filename: 'AutoFa.apk',
-          onEvent: (res) => {
-            if (!isMountedRef.current) return;
-            if (res?.event === 'progress') {
-              const received = Number(res.bytesWritten);
-              const total = Number(res.expectedBytes);
-              if (Number.isFinite(received) && Number.isFinite(total) && total > 0) {
-                setDownloadProgress({ received, total });
-              }
-              setDownloadStatus('Downloading AutoFA update...');
-              return;
-            }
-            if (res?.event === 'error') {
-              downloadInFlightRef.current = false;
-              downloadedApkRef.current = null;
-              setDownloadState('error');
-              setDownloadStatus('');
-              setErrorMessage(res.errorMessage || 'Unable to download the update. Please try again.');
-              return;
-            }
-            if (res?.event && res.event !== 'done') return;
-            downloadInFlightRef.current = false;
-
-            // Accept only genuine local references (content URI, file path).
-            // res.url would be the original download URL — not a local ref.
-            const localRef = res?.uri || res?.path || res?.filePath || res?.localUri || res?.localPath;
-            if (localRef) {
-              downloadedApkRef.current = localRef;
-              setDownloadState('completed');
-              setDownloadStatus('Ready to install.');
-              setDownloadProgress({ received: 1, total: 1 });
-            } else {
-              // Median responded but without a usable local file reference.
-              downloadedApkRef.current = null;
-              setDownloadState('error');
-              setDownloadStatus('');
-              setErrorMessage(res?.errorMessage || 'Download could not be completed. Please try again.');
-            }
-          },
-        });
-
-        if (!started) {
-          // Standard Median download API opens the Android installer itself.
-          // It has no completion callback/local-file handle, so never invent
-          // one or start a timeout that can falsely report a failed download.
-          const dispatched = medianDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: true });
-          if (!dispatched) throw new Error('median-bridge-unavailable');
-          // This bridge flavour does not expose download events. Keep an
-          // honest indeterminate state and leave Install disabled; Android
-          // opens its installer itself when the native download completes.
-          setDownloadStatus('Downloading AutoFA update... Android will open the installer when it is ready.');
+        console.info('[AutoFA update] native bridge detected', true);
+        // The APK's injected bridge exposes this command as a Promise. Its
+        // resolved value is the authoritative completion signal; no plugin
+        // callback or elapsed-time guess is used to declare success.
+        setDownloadStatus('Starting download...');
+        downloadWatchdogRef.current = window.setTimeout(() => {
+          if (!downloadInFlightRef.current || !isMountedRef.current) return;
+          downloadInFlightRef.current = false;
+          downloadedApkRef.current = null;
+          setDownloadState('error');
+          setDownloadStatus('');
+          setErrorMessage('The native download did not finish. Please try again.');
+        }, NATIVE_DOWNLOAD_SAFETY_TIMEOUT_MS);
+        const result = await medianShareDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: false });
+        if (downloadWatchdogRef.current) clearTimeout(downloadWatchdogRef.current);
+        downloadWatchdogRef.current = null;
+        // A late native callback must not overwrite the safety-timeout error.
+        if (!isMountedRef.current || !downloadInFlightRef.current) return;
+        downloadInFlightRef.current = false;
+        const localRef = getLocalApkReference(result);
+        if (!localRef) {
+          console.warn('[AutoFA update] native download completed without a local APK reference', result);
+          downloadedApkRef.current = null;
+          setDownloadState('error');
+          setDownloadStatus('');
+          setErrorMessage('Download completed but the native app did not return an installable APK reference. Please try again.');
+          return;
         }
+        downloadedApkRef.current = localRef;
+        setDownloadProgress({ received: 1, total: 1 });
+        setDownloadStatus('Ready to install.');
+        setDownloadState('completed');
+        console.info('[AutoFA update] download state changed', 'completed');
       } else {
         // ─────────────────────────────────────────────────────────────────
         // Plain browser (desktop or non-Median Android):

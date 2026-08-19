@@ -1,62 +1,27 @@
-import { Fragment } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
+import remarkGfm from 'remark-gfm';
 
-// Intentionally renders Markdown into React nodes rather than HTML. React
-// escapes text by default, so a GitHub release body cannot execute markup.
-function inline(text) {
-  const parts = String(text).split(/(\[[^\]]+\]\([^\s)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g);
-  return parts.map((part, index) => {
-    const link = part.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/);
-    if (link) {
-      const href = link[2];
-      return /^https?:\/\//i.test(href)
-        ? <a key={index} href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline dark:text-sky-300">{link[1]}</a>
-        : <Fragment key={index}>{part}</Fragment>;
-    }
-    if (/^`/.test(part)) return <code key={index} className="rounded bg-ink/10 px-1 font-mono text-[0.9em] dark:bg-white/10">{part.slice(1, -1)}</code>;
-    if (/^(\*\*|__)/.test(part)) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (/^\*/.test(part) || /^_/.test(part)) return <em key={index}>{part.slice(1, -1)}</em>;
-    return <Fragment key={index}>{part}</Fragment>;
-  });
-}
-
-function inlineLines(lines) {
-  return lines.map((line, index) => (
-    <Fragment key={index}>
-      {index > 0 && <br />}
-      {inline(line)}
-    </Fragment>
-  ));
-}
-
+// react-markdown does not render raw HTML unless rehype-raw is added. Keeping
+// that plugin out makes GitHub release notes safe while preserving Markdown.
 export default function ReleaseNotesMarkdown({ markdown }) {
-  const lines = String(markdown || '').replace(/\r/g, '').split('\n');
-  const nodes = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) { index += 1; continue; }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      const Tag = `h${heading[1].length}`;
-      const headingClasses = ['mt-4 text-base font-bold first:mt-0', 'mt-3 text-sm font-bold', 'mt-3 text-xs font-bold uppercase tracking-wide'];
-      nodes.push(<Tag key={index} className={headingClasses[heading[1].length - 1]}>{inline(heading[2])}</Tag>);
-      index += 1; continue;
-    }
-    const list = line.match(/^\s*([-*+] |\d+\. )(.+)$/);
-    if (list) {
-      const ordered = /^\s*\d+\. /.test(line); const items = [];
-      while (index < lines.length) {
-        const item = lines[index].match(ordered ? /^\s*\d+\.\s+(.+)$/ : /^\s*[-*+]\s+(.+)$/);
-        if (!item) break;
-        items.push(<li key={index}>{inline(item[1])}</li>); index += 1;
-      }
-      const Tag = ordered ? 'ol' : 'ul';
-      nodes.push(<Tag key={`list-${index}`} className={`my-2 space-y-1 pl-5 ${ordered ? 'list-decimal' : 'list-disc'}`}>{items}</Tag>);
-      continue;
-    }
-    const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !/^(#{1,3}\s+|\s*[-*+]\s+|\s*\d+\.\s+)/.test(lines[index])) paragraph.push(lines[index++]);
-    nodes.push(<p key={index} className="mt-3 first:mt-0">{inlineLines(paragraph)}</p>);
-  }
-  return <div className="max-h-40 overflow-y-auto pr-1 text-xs leading-5 text-ink dark:text-ink-dark">{nodes}</div>;
+  return (
+    <div className="max-h-40 overflow-y-auto pr-1 text-xs leading-5 text-ink dark:text-ink-dark">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={{
+          h1: ({ children }) => <h1 className="mb-3 mt-4 text-base font-bold first:mt-0">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-2 mt-4 text-sm font-bold">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-2 mt-3 text-xs font-bold uppercase tracking-wide">{children}</h3>,
+          p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+          ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 marker:text-success last:mb-0 dark:marker:text-green-400">{children}</ul>,
+          ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+          a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline dark:text-sky-300">{children}</a>,
+          code: ({ children }) => <code className="rounded bg-ink/10 px-1 font-mono text-[0.9em] dark:bg-white/10">{children}</code>,
+        }}
+      >
+        {markdown || ''}
+      </ReactMarkdown>
+    </div>
+  );
 }

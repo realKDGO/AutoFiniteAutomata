@@ -172,8 +172,7 @@ export function medianDownloadFile(options) {
     const bridge = window.median || window.Median || window.gonative;
 
     if (typeof bridge?.share?.downloadFile === 'function') {
-      bridge.share.downloadFile({ url, filename, open });
-      return true;
+      return bridge.share.downloadFile({ url, filename, open, callback });
     }
 
     if (bridge?.downloads?.downloadFile) {
@@ -199,6 +198,28 @@ export function medianDownloadFile(options) {
     return false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Use the download bridge embedded in the AutoFA APK.  The injected bridge
+ * returns a Promise when no callback is supplied, resolving with the native
+ * command result or rejecting with the native error.
+ */
+export async function medianShareDownloadFile({ url, filename = 'AutoFa.apk', open = false }) {
+  if (!isMedianApp()) throw new Error('median-bridge-unavailable');
+  const bridge = window.median || window.Median || window.gonative;
+  if (typeof bridge?.share?.downloadFile !== 'function') {
+    throw new Error('median-share-download-unavailable');
+  }
+  console.info('[AutoFA update] invoking median.share.downloadFile', { url, filename, open });
+  try {
+    const result = await bridge.share.downloadFile({ url, filename, open });
+    console.info('[AutoFA update] native download result', result);
+    return result;
+  } catch (error) {
+    console.error('[AutoFA update] native download failed', error);
+    throw error;
   }
 }
 
