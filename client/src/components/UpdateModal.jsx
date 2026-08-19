@@ -9,8 +9,9 @@ import {
   RefreshCw,
   Smartphone,
 } from 'lucide-react';
-import { APK_CONFIG, CURRENT_APP_VERSION } from '../apkConfig';
-import { isAndroid, isIOS, isMedianApp, medianDownloadFile, medianOpenFile } from '../lib/platform';
+import { APK_CONFIG } from '../apkConfig';
+import ReleaseNotesMarkdown from './ReleaseNotesMarkdown';
+import { getMedianAppVersion, isMedianApp, medianDownloadFile, medianDownloadTrackedFile, medianOpenFile } from '../lib/platform';
 import { isUpdateAvailable } from '../utils/semver';
 
 /**
@@ -25,6 +26,7 @@ import { isUpdateAvailable } from '../utils/semver';
 export default function UpdateModal() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState(APK_CONFIG.version);
+  const [currentVersion, setCurrentVersion] = useState(null);
   // GitHub Release's own name/body — this is what makes "What's New" appear
   // automatically for every future release with zero code changes (§4).
   const [releaseName, setReleaseName] = useState(null);
@@ -52,15 +54,15 @@ export default function UpdateModal() {
   }, []);
 
   useEffect(() => {
-    // Determine whether APK update checking applies to this client environment.
-    // Desktop and iOS browsers run the web client and should not be prompted to install APKs.
-    const isAppEnvironment = isMedianApp() || (isAndroid() && !isIOS());
-    if (!isAppEnvironment) return;
+    // APK updates apply only to the installed Median shell, never a browser.
+    if (!isMedianApp()) return;
 
     let isMounted = true;
 
     async function checkVersion() {
       try {
+        const installedVersion = await getMedianAppVersion();
+        const authoritativeVersion = installedVersion || APK_CONFIG.version;
         const res = await fetch('/api/version');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -68,15 +70,19 @@ export default function UpdateModal() {
 
         if (isMounted) {
           setLatestVersion(serverVersion);
+          setCurrentVersion(authoritativeVersion);
           if (typeof data.releaseName === 'string') setReleaseName(data.releaseName);
           if (typeof data.releaseNotes === 'string') setReleaseNotes(data.releaseNotes);
-          if (isUpdateAvailable(CURRENT_APP_VERSION, serverVersion)) {
+          if (isUpdateAvailable(authoritativeVersion, serverVersion)) {
             setUpdateAvailable(true);
           }
         }
       } catch {
         // If offline or endpoint is unreachable, gracefully fall back to local config
-        if (isMounted && isUpdateAvailable(CURRENT_APP_VERSION, APK_CONFIG.version)) {
+        const installedVersion = await getMedianAppVersion();
+        const authoritativeVersion = installedVersion || APK_CONFIG.version;
+        if (isMounted) setCurrentVersion(authoritativeVersion);
+        if (isMounted && isUpdateAvailable(authoritativeVersion, APK_CONFIG.version)) {
           setUpdateAvailable(true);
         }
       }
@@ -91,7 +97,7 @@ export default function UpdateModal() {
 
   if (!updateAvailable) return null;
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     // Never allow multiple simultaneous downloads (e.g. double-tap).
     if (downloadInFlightRef.current) return;
     downloadInFlightRef.current = true;
@@ -100,9 +106,9 @@ export default function UpdateModal() {
     setDownloadState('downloading');
     setErrorMessage('');
 
-    // Median requires a public, non-localhost URL (docs.median.co/docs/download-file),
-    // or same-origin proxy endpoint.
-    const absoluteApkUrl = new URL(APK_CONFIG.downloadUrl, window.location.origin).href;
+    // Native Median downloads use GitHub's public, absolute asset URL. The
+    // browser /download flow continues using the same-origin proxy.
+    const directApkUrl = APK_CONFIG.githubDownloadUrl;
 
     try {
       if (isMedianApp()) {
@@ -112,11 +118,11 @@ export default function UpdateModal() {
         // local file reference (content URI / file path). Never use the
         // download URL itself as a substitute for a local file reference.
         // ─────────────────────────────────────────────────────────────────
-        const started = medianDownloadFile({
-          url: absoluteApkUrl,
+        const started = await medianDownloadTrackedFile({
+          url: directApkUrl,
           filename: 'AutoFa.apk',
-          open: false,
-          callback: (res) => {
+          onEvent: (res) => {
+            if (res?.event === 'progress') return;
             // Cancel watchdog — callback fired.
             if (downloadWatchdogRef.current) {
               clearTimeout(downloadWatchdogRef.current);
@@ -128,7 +134,7 @@ export default function UpdateModal() {
 
             // Accept only genuine local references (content URI, file path).
             // res.url would be the original download URL — not a local ref.
-            const localRef = res?.uri || res?.path || res?.filePath;
+            const localRef = res?.uri || res?.path || res?.filePath || res?.localUri || res?.localPath;
             if (localRef) {
               downloadedApkRef.current = localRef;
               setDownloadState('completed');
@@ -136,25 +142,20 @@ export default function UpdateModal() {
               // Median responded but without a usable local file reference.
               downloadedApkRef.current = null;
               setDownloadState('error');
-              setErrorMessage(
-                'Download completed but no local file reference was received. Please try again.',
-              );
+              setErrorMessage(res?.errorMessage || 'Download could not be completed. Please try again.');
             }
           },
         });
 
-        if (!started) throw new Error('median-bridge-unavailable');
-
-        // 60-second watchdog: if the Median callback never fires, surface an error.
-        downloadWatchdogRef.current = window.setTimeout(() => {
-          downloadWatchdogRef.current = null;
-          if (!downloadInFlightRef.current) return; // callback already resolved
+        if (!started) {
+          // Standard Median download API opens the Android installer itself.
+          // It has no completion callback/local-file handle, so never invent
+          // one or start a timeout that can falsely report a failed download.
+          const dispatched = medianDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: true });
+          if (!dispatched) throw new Error('median-bridge-unavailable');
           downloadInFlightRef.current = false;
-          if (!isMountedRef.current) return;
-          downloadedApkRef.current = null;
-          setDownloadState('error');
-          setErrorMessage('Download timed out. Please try again.');
-        }, 60_000);
+          setDownloadState('native_install');
+        }
       } else {
         // ─────────────────────────────────────────────────────────────────
         // Plain browser (desktop or non-Median Android):
@@ -250,7 +251,7 @@ export default function UpdateModal() {
                 Current version
               </span>
               <p className="mt-0.5 font-mono text-sm font-bold text-ink dark:text-ink-dark">
-                v{CURRENT_APP_VERSION}
+                v{currentVersion || APK_CONFIG.version}
               </p>
             </div>
             <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 dark:border-success/40 dark:bg-success/10">
@@ -271,19 +272,7 @@ export default function UpdateModal() {
             <h3 className="text-[11px] font-bold uppercase tracking-[0.15em] text-ink-muted dark:text-ink-darkMuted">
               What&rsquo;s New{releaseName ? ` · ${releaseName}` : ''}
             </h3>
-            <ul className="mt-2 space-y-1.5">
-              {releaseNotes
-                .split('\n')
-                .map(line => line.replace(/^[-*]\s*/, '').trim())
-                .filter(Boolean)
-                .slice(0, 6)
-                .map((line, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs leading-5 text-ink dark:text-ink-dark">
-                    <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-success dark:text-green-400" />
-                    {line}
-                  </li>
-                ))}
-            </ul>
+            <div className="mt-2"><ReleaseNotesMarkdown markdown={releaseNotes} /></div>
           </div>
         )}
 
@@ -308,6 +297,12 @@ export default function UpdateModal() {
           <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs font-medium text-success dark:border-success/40 dark:bg-success/10 dark:text-green-400">
             <CheckCircle2 size={16} className="shrink-0" />
             <span>Download complete. Ready to install.</span>
+          </div>
+        )}
+        {downloadState === 'native_install' && (
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs font-medium text-success dark:border-success/40 dark:bg-success/10 dark:text-green-400">
+            <CheckCircle2 size={16} className="shrink-0" />
+            <span>Download started. Android will show the installer when it is ready.</span>
           </div>
         )}
 

@@ -79,6 +79,24 @@ export function isMedianApp() {
   }
 }
 
+/**
+ * Returns the version embedded in the installed Median APK.  This is kept
+ * separate from the website release configuration: the latter describes an
+ * available download, while this value describes the app that is actually
+ * running on the device.
+ */
+export async function getMedianAppVersion() {
+  try {
+    if (!isMedianApp()) return null;
+    const bridge = window.median || window.Median || window.gonative;
+    const deviceInfo = await bridge?.deviceInfo?.();
+    const version = deviceInfo?.appVersion;
+    return typeof version === 'string' && version.trim() ? version.trim().replace(/^v/i, '') : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Device / browser detection
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,8 +166,15 @@ export function medianDownloadFile(options) {
     const { url, filename = 'AutoFa.apk', open = false, callback } = options || {};
     if (!url) return false;
 
-    // Check window.median.downloads or window.gonative.downloads
+    // `share.downloadFile` is Median's standard file-download API. It accepts
+    // a public absolute URL and lets Android hand the finished APK to the
+    // package installer when `open` is true.
     const bridge = window.median || window.Median || window.gonative;
+
+    if (typeof bridge?.share?.downloadFile === 'function') {
+      bridge.share.downloadFile({ url, filename, open });
+      return true;
+    }
 
     if (bridge?.downloads?.downloadFile) {
       bridge.downloads.downloadFile({ url, filename, open, callback });
@@ -172,6 +197,32 @@ export function medianDownloadFile(options) {
     }
 
     return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register once with Median's optional Offline Download Manager and begin a
+ * tracked download.  Its `done` event is the only bridge event that can
+ * safely supply a local APK reference for a later Install button.
+ */
+export async function medianDownloadTrackedFile({ url, filename = 'AutoFa.apk', onEvent }) {
+  try {
+    const bridge = window.median || window.Median || window.gonative;
+    if (!url || !bridge?.downloads?.downloadFile) return false;
+    const identifier = `autofa-apk-${Date.now()}`;
+    if (typeof bridge.downloads.init === 'function') {
+      await bridge.downloads.init({
+        callback: (event) => {
+          if (!event?.identifier || event.identifier === identifier) onEvent?.(event);
+        },
+      });
+    } else {
+      return false;
+    }
+    bridge.downloads.downloadFile({ url, title: filename, identifier });
+    return identifier;
   } catch {
     return false;
   }

@@ -58,11 +58,3 @@ export const APK_CONFIG = {
     'Dark mode and mobile-optimised layout',
   ],
 };
-
-/**
- * The version of the currently installed AutoFA APK.
- * This is the single authoritative version constant used by the update system.
- * Update APK_CONFIG.version above when publishing a new release — this export
- * reflects that value automatically so there is no risk of them drifting apart.
- */
-export const CURRENT_APP_VERSION = APK_CONFIG.version;
