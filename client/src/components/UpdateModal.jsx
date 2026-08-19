@@ -25,6 +25,10 @@ import { isUpdateAvailable } from '../utils/semver';
 export default function UpdateModal() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState(APK_CONFIG.version);
+  // GitHub Release's own name/body — this is what makes "What's New" appear
+  // automatically for every future release with zero code changes (§4).
+  const [releaseName, setReleaseName] = useState(null);
+  const [releaseNotes, setReleaseNotes] = useState(null);
   const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error' | 'unsupported'
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -64,6 +68,8 @@ export default function UpdateModal() {
 
         if (isMounted) {
           setLatestVersion(serverVersion);
+          if (typeof data.releaseName === 'string') setReleaseName(data.releaseName);
+          if (typeof data.releaseNotes === 'string') setReleaseNotes(data.releaseNotes);
           if (isUpdateAvailable(CURRENT_APP_VERSION, serverVersion)) {
             setUpdateAvailable(true);
           }
@@ -201,8 +207,12 @@ export default function UpdateModal() {
     });
 
     if (!opened) {
-      setDownloadState('error');
-      setErrorMessage('Unable to open the APK installer. Please try downloading the update again.');
+      // §7D: the install dispatch itself failed (bridge unavailable/threw) —
+      // the local APK reference is still valid, so keep it and let the user
+      // retry installing directly rather than forcing a redundant re-download.
+      downloadedApkRef.current = localApkRef;
+      setDownloadState('install_error');
+      setErrorMessage('Unable to open the APK installer. Please try installing again.');
     }
   };
 
@@ -254,8 +264,31 @@ export default function UpdateModal() {
           </div>
         </div>
 
-        {/* Error notification if download fails */}
-        {downloadState === 'error' && (
+        {/* What's New — sourced directly from the GitHub Release body, so a
+            new release's patch notes show up automatically (§4). */}
+        {releaseNotes && (
+          <div className="mt-4 rounded-xl border border-line bg-surface-muted p-3.5 dark:border-line-dark dark:bg-surface-darkMuted">
+            <h3 className="text-[11px] font-bold uppercase tracking-[0.15em] text-ink-muted dark:text-ink-darkMuted">
+              What&rsquo;s New{releaseName ? ` · ${releaseName}` : ''}
+            </h3>
+            <ul className="mt-2 space-y-1.5">
+              {releaseNotes
+                .split('\n')
+                .map(line => line.replace(/^[-*]\s*/, '').trim())
+                .filter(Boolean)
+                .slice(0, 6)
+                .map((line, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs leading-5 text-ink dark:text-ink-dark">
+                    <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-success dark:text-green-400" />
+                    {line}
+                  </li>
+                ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Error notification if download or install fails */}
+        {(downloadState === 'error' || downloadState === 'install_error') && (
           <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger/5 p-3 text-xs text-danger dark:border-danger/40 dark:bg-danger/10">
             <AlertCircle size={16} className="shrink-0 mt-0.5" />
             <span>{errorMessage || 'Unable to download the update. Please try again.'}</span>
@@ -321,6 +354,19 @@ export default function UpdateModal() {
             >
               <Smartphone size={18} />
               Install Update
+            </button>
+          )}
+
+          {/* §7D: install dispatch failed but the downloaded APK is still valid —
+              retry the install itself, don't force the user through another download. */}
+          {downloadState === 'install_error' && (
+            <button
+              type="button"
+              onClick={handleInstall}
+              className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-success px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-[0.98]"
+            >
+              <RefreshCw size={18} />
+              Retry Install
             </button>
           )}
         </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertCircle, ArrowLeft, CheckCircle, Download, RefreshCw, Smartphone } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import logo from '../assets/logo.png';
@@ -11,13 +11,40 @@ import { APK_CONFIG } from '../apkConfig';
  * Android app. GitHub is the APK release source but is kept behind the scenes;
  * users only interact with this page.
  *
- * The APK download URL uses GitHub Releases' /latest/download/ redirect so
- * future releases automatically surface here without a code change — as long
- * as the asset is always named "AutoFa.apk".
+ * The displayed version and "What's New" list come from GET /api/version
+ * (which itself resolves from GitHub Releases), so a new release shows up
+ * here automatically with no code change — as long as the asset is always
+ * named "AutoFa.apk". APK_CONFIG's static values are only the fallback if
+ * that fetch fails, so this page never breaks or blanks out (§7).
  */
 
 export default function DownloadPage() {
   const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'error'
+  const [displayVersion, setDisplayVersion] = useState(APK_CONFIG.version);
+  const [whatsNew, setWhatsNew] = useState(APK_CONFIG.whatsNew ?? []);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetch('/api/version')
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then(data => {
+        if (!isMounted) return;
+        if (typeof data.version === 'string') setDisplayVersion(data.version);
+        if (typeof data.releaseNotes === 'string') {
+          const bullets = data.releaseNotes
+            .split('\n')
+            .map(line => line.replace(/^[-*]\s*/, '').trim())
+            .filter(Boolean);
+          if (bullets.length > 0) setWhatsNew(bullets.slice(0, 8));
+        }
+      })
+      // Endpoint unreachable/errored: keep the static APK_CONFIG values
+      // already set as initial state — the page stays fully usable (§7).
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleDownload = () => {
     setDownloadState('downloading');
@@ -68,7 +95,7 @@ export default function DownloadPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center rounded-lg bg-success/10 px-2.5 py-1 text-xs font-bold text-success dark:text-green-400">
-                  v{APK_CONFIG.version}
+                  v{displayVersion}
                 </span>
                 <span className="text-xs text-ink-muted dark:text-ink-darkMuted">
                   Latest release
@@ -121,7 +148,7 @@ export default function DownloadPage() {
                     ? 'bg-primary-hover'
                     : 'bg-primary hover:bg-primary-hover hover:shadow-[0_6px_16px_rgb(22_131_216_/_0.22)]'
                 }`}
-                aria-label={`Download AutoFA APK version ${APK_CONFIG.version}`}
+                aria-label={`Download AutoFA APK version ${displayVersion}`}
               >
                 {downloadState === 'downloading' ? (
                   <>
@@ -142,14 +169,16 @@ export default function DownloadPage() {
             </p>
           </div>
 
-          {/* What's New */}
-          {APK_CONFIG.whatsNew && APK_CONFIG.whatsNew.length > 0 && (
+          {/* What's New — from the latest GitHub Release when available,
+              falling back to APK_CONFIG.whatsNew if /api/version couldn't
+              be reached (§7). */}
+          {whatsNew && whatsNew.length > 0 && (
             <div className="border-t border-line px-6 py-5 dark:border-line-dark">
               <h2 className="mb-3 text-xs font-bold uppercase tracking-[0.15em] text-ink-muted dark:text-ink-darkMuted">
                 What&rsquo;s New
               </h2>
               <ul className="space-y-2">
-                {APK_CONFIG.whatsNew.map((item) => (
+                {whatsNew.map((item) => (
                   <li key={item} className="flex items-start gap-2 text-sm text-ink dark:text-ink-dark">
                     <CheckCircle
                       size={14}

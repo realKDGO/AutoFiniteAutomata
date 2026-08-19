@@ -226,6 +226,17 @@ export function medianOpenFile(options) {
  * Attempts to open the AutoFA Android app from a mobile browser using Android Intent / App Links.
  * Only attempts once per session to prevent infinite redirect loops.
  *
+ * NOTE: this alone is not sufficient for the launch to actually resolve to
+ * the app — the installed APK's AppLinksActivity must have a matching
+ * intent-filter, which Median only generates once App Links/Link Handling
+ * is configured for this domain in Median App Studio (and the domain's
+ * /.well-known/assetlinks.json is hosted with the real signing
+ * fingerprint). See docs/android-app-links.md. Without that one-time
+ * dashboard step, this call is a harmless no-op from the OS's perspective
+ * (Chrome shows its own "can't open" handling and the page stays visible),
+ * which the visibility-based timeout in InstallAppBanner already accounts
+ * for as a normal "app not available" outcome.
+ *
  * @returns {boolean} True if the launch attempt was triggered
  */
 export function openMedianApp() {
@@ -246,8 +257,13 @@ export function openMedianApp() {
     // If the app is not installed, Chrome shows a system error and the page
     // stays visible. The caller (InstallAppBanner) uses the Page Visibility
     // API to determine which outcome occurred.
+    //
+    // Uses the current page's actual host (rather than a hard-coded
+    // production domain) so this also behaves correctly from preview/staging
+    // deployments, as long as they're configured as an App Link domain too.
+    const host = window.location.host;
     const intentUrl =
-      'intent://autofa.vercel.app/#Intent;scheme=https;package=co.median.android.jbjpjqx;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end';
+      `intent://${host}/#Intent;scheme=https;package=co.median.android.jbjpjqx;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end`;
 
     window.location.href = intentUrl;
     return true;
