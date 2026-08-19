@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { APK_CONFIG } from '../apkConfig';
 import ReleaseNotesMarkdown from './ReleaseNotesMarkdown';
-import { getMedianAppVersion, isMedianApp, medianShareDownloadFile } from '../lib/platform';
+import { getMedianAppVersion, isMedianApp, medianShareDownloadFile, openSystemDownloads } from '../lib/platform';
 import { isUpdateAvailable } from '../utils/semver';
 
 const NATIVE_DOWNLOAD_SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
@@ -31,7 +31,7 @@ export default function UpdateModal() {
   // automatically for every future release with zero code changes (§4).
   const [releaseName, setReleaseName] = useState(null);
   const [releaseNotes, setReleaseNotes] = useState(null);
-  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'native_open' | 'error'
+  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'downloaded' | 'error'
   const [errorMessage, setErrorMessage] = useState('');
   const [downloadStatus, setDownloadStatus] = useState('');
 
@@ -121,18 +121,18 @@ export default function UpdateModal() {
           setDownloadStatus('');
           setErrorMessage('The native download did not finish. Please try again.');
         }, NATIVE_DOWNLOAD_SAFETY_TIMEOUT_MS);
-        const result = await medianShareDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: true });
+        const result = await medianShareDownloadFile({ url: directApkUrl, filename: 'AutoFa.apk', open: false });
         if (downloadWatchdogRef.current) clearTimeout(downloadWatchdogRef.current);
         downloadWatchdogRef.current = null;
         // A late native callback must not overwrite the safety-timeout error.
         if (!isMountedRef.current || !downloadInFlightRef.current) return;
         downloadInFlightRef.current = false;
-        // Median owns the downloaded file and opens it natively when
-        // `open: true` is set. A file URI is neither expected nor required.
-        console.info('[AutoFA update] native download/open completed', result);
-        setDownloadStatus('Download complete. Opening Android installer...');
-        setDownloadState('native_open');
-        console.info('[AutoFA update] download state changed', 'native_open');
+        // System Downloads owns the saved APK. A local URI is not required
+        // for this manual install flow.
+        console.info('[AutoFA update] native system download completed', result);
+        setDownloadStatus('AutoFa.apk has been saved to your Downloads folder.');
+        setDownloadState('downloaded');
+        console.info('[AutoFA update] download state changed', 'downloaded');
       } else {
         // ─────────────────────────────────────────────────────────────────
         // Plain browser (desktop or non-Median Android):
@@ -158,6 +158,13 @@ export default function UpdateModal() {
       setDownloadState('error');
       setDownloadStatus('');
       setErrorMessage('Unable to start the download. Please try again.');
+    }
+  };
+
+  const handleOpenDownloads = () => {
+    const opened = openSystemDownloads();
+    if (!opened) {
+      setDownloadStatus('Update downloaded successfully. Open your phone\'s Files or Downloads app and tap AutoFa.apk to install it.');
     }
   };
 
@@ -228,10 +235,10 @@ export default function UpdateModal() {
           </div>
         )}
 
-        {downloadState === 'native_open' && (
+        {downloadState === 'downloaded' && (
           <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs font-medium text-success dark:border-success/40 dark:bg-success/10 dark:text-green-400">
             <CheckCircle2 size={16} className="shrink-0" />
-            <span>{downloadStatus}</span>
+            <span>{downloadStatus} Tap Open Downloads, then tap AutoFa.apk to install the update.</span>
           </div>
         )}
         {downloadState === 'downloading' && (() => {
@@ -257,7 +264,7 @@ export default function UpdateModal() {
               className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-hover active:scale-[0.98]"
             >
               <Download size={18} />
-              Download &amp; Install Update
+              Download Update
             </button>
           )}
 
@@ -276,6 +283,17 @@ export default function UpdateModal() {
             >
               <RefreshCw size={18} />
               Retry Update
+            </button>
+          )}
+
+          {downloadState === 'downloaded' && (
+            <button
+              type="button"
+              onClick={handleOpenDownloads}
+              className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-success px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-[0.98]"
+            >
+              <Download size={18} />
+              Open Downloads
             </button>
           )}
 

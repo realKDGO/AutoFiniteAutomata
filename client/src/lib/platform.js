@@ -224,6 +224,21 @@ export async function medianShareDownloadFile({ url, filename = 'AutoFa.apk', op
 }
 
 /**
+ * Opens Android's system Downloads surface without selecting a particular
+ * file-manager app. The intent is handled by Android/the current Median
+ * WebView, just as the existing Android app-handoff intent is.
+ */
+export function openSystemDownloads() {
+  try {
+    if (!isMedianApp()) return false;
+    window.location.href = 'intent:#Intent;action=android.intent.action.VIEW_DOWNLOADS;end';
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Register once with Median's optional Offline Download Manager and begin a
  * tracked download.  Its `done` event is the only bridge event that can
  * safely supply a local APK reference for a later Install button.
